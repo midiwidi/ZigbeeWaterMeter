@@ -69,7 +69,7 @@ First, download the project code from the GitHub repository:
 
 ```bash
 git clone https://github.com/IgnacioHR/ZigbeeGasMeter.git
-cd zigbee-gas-meter
+cd ZigbeeGasMeter
 ```
 
 ### **2. Configure the target chip**
