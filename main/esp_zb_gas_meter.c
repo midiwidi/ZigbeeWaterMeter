@@ -701,7 +701,7 @@ static void s_longpress_timer_callback(void* arg)
             .device_address = {},
             .dst_nwk_addr = 0xFFFF,
             .remove_children = 0,
-            .rejoin = 1
+            .rejoin = 0
         };
         esp_zb_get_long_address(leave_request.device_address);
         esp_zb_zdo_device_leave_req(&leave_request, leave_callback, NULL);

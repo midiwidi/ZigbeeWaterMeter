@@ -143,7 +143,6 @@ If you want to contribute or improve this project, feel free to fork the reposit
 Here are the planned improvements:
 
 1. Implement battery monitoring and reporting via Zigbee.
-1. Add a reset button to leave the network and rejoin.
 1. Design a custom PCB for the ESP32-C6, connectors, and resistors.
 1. Create a 3D-printed enclosure for secure installation.
 
