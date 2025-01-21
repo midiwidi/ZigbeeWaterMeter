@@ -68,7 +68,7 @@ To build this project, you’ll need:
 First, download the project code from the GitHub repository:
 
 ```bash
-git clone https://github.com/your-username/zigbee-gas-meter.git
+git clone https://github.com/IgnacioHR/ZigbeeGasMeter.git
 cd zigbee-gas-meter
 ```
 
