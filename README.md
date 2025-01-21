@@ -150,3 +150,7 @@ Here are the planned improvements:
 ## Acknowledgments
 
 By improving the content structure and emphasizing actionable steps, this README not only serves as a guide for your project but also inspires others to create their own Zigbee devices.
+
+## License
+
+[License](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en)
