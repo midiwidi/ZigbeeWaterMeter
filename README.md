@@ -145,6 +145,7 @@ Here are the planned improvements:
 1. Implement battery monitoring and reporting via Zigbee.
 1. Design a custom PCB for the ESP32-C6, connectors, and resistors.
 1. Create a 3D-printed enclosure for secure installation.
+1. OTA support.
 
 ## Acknowledgments
 
