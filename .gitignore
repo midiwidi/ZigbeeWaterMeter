@@ -1,4 +1,6 @@
+notes/
 build/
 managed_components/
 .vscode/
 sdkconfig.old
+start_mosquitto.sh

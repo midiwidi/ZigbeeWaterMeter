@@ -139,8 +139,12 @@ static bool started_from_deep_sleep = false;
 static bool stop_long_press_detector = false;
 
 // TODO: measure this
-// static uint8_t battery_voltage = 29;
-// static uint8_t battery_percentage = 95;
+static uint8_t battery_voltage = 29;
+static uint8_t battery_percentage = 95;
+
+// when set to true the battery percentage will be included 
+// in the next report
+static bool battery_report = false;
 
 // set to true when PULSE_PIN raises. Prevents the deep slep
 // to enter when the device is in the middle of a clycle count
@@ -315,31 +319,40 @@ static esp_err_t zb_configure_report_resp_handler(const esp_zb_zcl_cmd_config_re
 }
 
 // transfer values from variables to zigbee radio
-static void zb_radio_setup_values(bool adquire) {
-    if ((adquire && esp_zb_lock_acquire(portMAX_DELAY)) || !adquire) {
-        // ESP_LOGI(TAG, "Lock adquired");
-        esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
-            ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID, &current_summation_delivered, false);
+static esp_zb_zcl_status_t zb_radio_setup_values() {
+    esp_zb_zcl_status_t status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID, &current_summation_delivered, false);
+    if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGE(TAG, "Updating value of current summation delivered: %d", status);
+        return status;
+    }
+    status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID, &instantaneous_demand, false);
+    if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGE(TAG, "Updating value of instantaneous demand: %d", status);
+        return status;
+    }
+    if (battery_report) {
+        status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
+            ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID, &battery_percentage, false);
         if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGE(TAG, "Status not success updating value of current summation delivered: %d", status);
+            ESP_LOGE(TAG, "Updating value of battery percentage: %d", status);
         }
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
-            ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID, &instantaneous_demand, false);
+            ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID, &battery_voltage, false);
         if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGE(TAG, "Status not success updating value of instantaneous demand: %d", status);
+            ESP_LOGE(TAG, "Updating value of battery voltage: %d", status);
         }
-
-        // ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd1));
-        // ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd2));
-        if (adquire)
-            esp_zb_lock_release();
     }
+    return status;
 }
 
 // report attributes to radio
-static void zb_radio_send_values(bool adquire) {
+static void zb_radio_send_values() {
     // this blows up the network anc causes all devices to become offline!
     esp_zb_zcl_report_attr_cmd_t report_attr_cmd1 = {0};
     report_attr_cmd1.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
@@ -347,6 +360,7 @@ static void zb_radio_send_values(bool adquire) {
     report_attr_cmd1.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
     report_attr_cmd1.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
     report_attr_cmd1.zcl_basic_cmd.src_endpoint = MY_METERING_ENDPOINT;
+    ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd1));
 
     esp_zb_zcl_report_attr_cmd_t report_attr_cmd2 = {0};
     report_attr_cmd2.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
@@ -354,37 +368,37 @@ static void zb_radio_send_values(bool adquire) {
     report_attr_cmd2.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
     report_attr_cmd2.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
     report_attr_cmd2.zcl_basic_cmd.src_endpoint = MY_METERING_ENDPOINT;
+    ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd2));
 
-    if ((adquire && esp_zb_lock_acquire(portMAX_DELAY)) || !adquire) {
-        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd1));
-        if (adquire)
-            esp_zb_lock_release();
-    }
-    if ((adquire && esp_zb_lock_acquire(portMAX_DELAY)) || !adquire) {
-        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd2));
-        if (adquire)
-            esp_zb_lock_release();
+    if (battery_report) {
+        esp_zb_zcl_report_attr_cmd_t report_attr_cmd4 = {0};
+        report_attr_cmd4.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
+        report_attr_cmd4.attributeID = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID;
+        report_attr_cmd4.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
+        report_attr_cmd4.clusterID = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG;
+        report_attr_cmd4.zcl_basic_cmd.src_endpoint = MY_METERING_ENDPOINT;
+        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd4));
     }
 }
 
 // response to attribute action 0x1005
-static esp_err_t zb_default_response(const esp_zb_zcl_cmd_default_resp_message_t *message)
-{
-    ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
-    ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
-                        message->info.status);
+// static esp_err_t zb_default_response(const esp_zb_zcl_cmd_default_resp_message_t *message)
+// {
+//     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
+//     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
+//                         message->info.status);
 
-    // Does nothing??
-    // ESP_LOGI(TAG, "esp_zb_zcl_cmd_default_resp_message_t");
-    // ESP_LOGI(TAG, "  info");
-    // log_zcl_cmd_info(&message->info, 4);
-    // ESP_LOGI(TAG, "  resp_to_cmd: %d", message->resp_to_cmd);
-    // ESP_LOGI(TAG, "  status_code: 0x%x", message->status_code);
+//     // Does nothing??
+//     // ESP_LOGI(TAG, "esp_zb_zcl_cmd_default_resp_message_t");
+//     // ESP_LOGI(TAG, "  info");
+//     // log_zcl_cmd_info(&message->info, 4);
+//     // ESP_LOGI(TAG, "  resp_to_cmd: %d", message->resp_to_cmd);
+//     // ESP_LOGI(TAG, "  status_code: 0x%x", message->status_code);
 
-    // zb_radio_setup_values(false);
+//     // zb_radio_setup_values(false);
 
-    return ESP_OK;
-}
+//     return ESP_OK;
+// }
 
 // Attribute handler
 static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message) {
@@ -413,11 +427,11 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
                 zb_counter_save_nvs();
             }
         break;
-    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
-        ret = zb_default_response((esp_zb_zcl_cmd_default_resp_message_t *)message);
-        esp_zb_zcl_cmd_default_resp_message_t* msg = (esp_zb_zcl_cmd_default_resp_message_t*)message;
-        ESP_LOGI(TAG, "Default response callback: dst 0x%x, status: %u", msg->info.dst_address, msg->status_code);
-        break;
+    // case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
+    //     ret = zb_default_response((esp_zb_zcl_cmd_default_resp_message_t *)message);
+    //     esp_zb_zcl_cmd_default_resp_message_t* msg = (esp_zb_zcl_cmd_default_resp_message_t*)message;
+    //     ESP_LOGI(TAG, "Default response callback: dst 0x%x, status: %u", msg->info.dst_address, msg->status_code);
+    //     break;
     default:
         ESP_LOGW(TAG, "Receive Zigbee action(0x%x) callback", callback_id);
         break;
@@ -466,20 +480,20 @@ static void esp_zb_task(void *pvParameters) {
     ));
 
     /* power cluster */
-    // esp_zb_attribute_list_t *esp_zb_power_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG);
-    // ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_power_cluster,
-    //                                     ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-    //                                     ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID,
-    //                                     ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
-    //                                     ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
-    //                                     &battery_voltage));
+    esp_zb_attribute_list_t *esp_zb_power_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG);
+    ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID,
+                                        ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
+                                        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
+                                        &battery_voltage));
 
-    // ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_power_cluster,
-    //                                     ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-    //                                     ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
-    //                                     ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
-    //                                     ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
-    //                                     &battery_percentage));
+    ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+                                        ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
+                                        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+                                        &battery_percentage));
 
     /* metering cluster */
     esp_zb_attribute_list_t *esp_zb_metering_server_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_METERING);
@@ -559,7 +573,7 @@ static void esp_zb_task(void *pvParameters) {
     esp_zb_cluster_list_add_identify_cluster(esp_zb_meter_cluster_list, esp_zb_identify_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_cluster_list_add_identify_cluster(esp_zb_meter_cluster_list, esp_zb_identify_client_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
     esp_zb_cluster_list_add_metering_cluster(esp_zb_meter_cluster_list, esp_zb_metering_server_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    // esp_zb_cluster_list_add_power_config_cluster(esp_zb_meter_cluster_list, esp_zb_power_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    esp_zb_cluster_list_add_power_config_cluster(esp_zb_meter_cluster_list, esp_zb_power_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
 
     esp_zb_ep_list_t *esp_zb_ep_meter_list = esp_zb_ep_list_create();
     esp_zb_endpoint_config_t endpoint_config = {
@@ -620,43 +634,24 @@ static void esp_zb_task(void *pvParameters) {
     };
     ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&instantaneous_demand_reporting_info));
 
-    // esp_zb_zcl_reporting_info_t battery_reporting_info = {
-    //     .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-    //     .ep = MY_METERING_ENDPOINT,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID,
-    //     .flags = 0x0,
-    //     .run_time = 0x00,
-    //     .u.send_info.min_interval = 3600,
-    //     .u.send_info.max_interval = (uint16_t)86400,
-    //     .u.send_info.delta.u8 = 1,
-    //     .u.send_info.reported_value.u8 = battery_voltage,
-    //     .u.send_info.def_min_interval = 3600,
-    //     .u.send_info.def_max_interval = (uint16_t)86400,
-    //     .dst.endpoint = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    // };
-    // ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&battery_reporting_info));
-
-    // esp_zb_zcl_reporting_info_t percentage_reporting_info = {
-    //     .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-    //     .ep = MY_METERING_ENDPOINT,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
-    //     .flags = 0x0,
-    //     .run_time = 0x00,
-    //     .u.send_info.min_interval = 3600,
-    //     .u.send_info.max_interval = (uint16_t)86400,
-    //     .u.send_info.delta.u8 = 1,
-    //     .u.send_info.reported_value.u8 = battery_percentage,
-    //     .u.send_info.def_min_interval = 3600,
-    //     .u.send_info.def_max_interval = (uint16_t)86400,
-    //     .dst.endpoint = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    // };
-    // ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&percentage_reporting_info));
+    esp_zb_zcl_reporting_info_t percentage_reporting_info = {
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .ep = MY_METERING_ENDPOINT,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+        .flags = 0x0,
+        .run_time = 0x00,
+        .u.send_info.min_interval = 3600,
+        .u.send_info.max_interval = (uint16_t)86400,
+        .u.send_info.delta.u8 = 1,
+        .u.send_info.reported_value.u8 = battery_percentage,
+        .u.send_info.def_min_interval = 3600,
+        .u.send_info.def_max_interval = (uint16_t)86400,
+        .dst.endpoint = MY_METERING_ENDPOINT,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+    };
+    ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&percentage_reporting_info));
 
     esp_zb_set_tx_power(-15);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
@@ -733,20 +728,22 @@ static void zb_deep_sleep_start_or_restart(void)
         zb_deep_sleep_start();
 }
 
-static void zb_longpress_start(void) {
-    int before_longpress_time_sec = LONG_PRESS_TIMEOUT * 1000;
-    if (started_from_deep_sleep) {
-        before_longpress_time_sec -= 2800; // measured time for the device to start
-    }
-    ESP_LOGI(TAG, "Start long press timer for %dms", before_longpress_time_sec);
-    ESP_ERROR_CHECK(esp_timer_start_once(s_longpress_timer, before_longpress_time_sec * 1000));
-}
 
 static void zb_longpress_stop(void) {
     if (esp_timer_is_active(s_longpress_timer)) {
         ESP_LOGI(TAG, "Stop long press timer");
         ESP_ERROR_CHECK(esp_timer_stop(s_longpress_timer));
     }
+}
+
+static void zb_longpress_start(void) {
+    int before_longpress_time_sec = LONG_PRESS_TIMEOUT * 1000;
+    if (started_from_deep_sleep) {
+        before_longpress_time_sec -= 2800; // measured time for the device to start
+    }
+    ESP_LOGI(TAG, "Start long press timer for %dms", before_longpress_time_sec);
+    zb_longpress_stop();
+    ESP_ERROR_CHECK(esp_timer_start_once(s_longpress_timer, before_longpress_time_sec * 1000));
 }
 
 // end zigbee values up if there are changes in the measured values
@@ -764,8 +761,14 @@ static void on_change_report_task(void *arg) {
         }
         if (force_report) {
             force_report = false;
-            zb_radio_setup_values(true);
-            zb_radio_send_values(true);
+            if (esp_zb_lock_acquire(portMAX_DELAY)) {
+                esp_zb_zcl_status_t status = zb_radio_setup_values();
+                if (status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+                    zb_radio_send_values();
+                }
+                esp_zb_lock_release();
+            }
+            battery_report = false;
             if (save_counter_nvr) {
                 zb_counter_save_nvs();
                 restart_deep_sleep = true;
@@ -1001,6 +1004,7 @@ void IRAM_ATTR gpio_wakeup_isr_handler(void *arg) {
             force_report = true;
             start_long_press_detector = true;
             started_from_deep_sleep = false;
+            battery_report = true;
         }
     }
     if (level == 0) {
