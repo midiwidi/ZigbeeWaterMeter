@@ -1,20 +1,8 @@
-/*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
- *
- * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
- * International License. To view a copy of this license, visit
- * https://creativecommons.org/licenses/by-nc-sa/4.0/
- *
- * You may use, modify, and share this work for personal and non-commercial purposes, as long
- * as you credit the original author(s) and share any derivatives under the same license.
- */
-
 const exposes = require('zigbee-herdsman-converters/lib/exposes');
 const m = require('zigbee-herdsman-converters/lib/modernExtend');
 const utils = require('zigbee-herdsman-converters/lib/utils');
-// const reporting = require('zigbee-herdsman-converters/lib/reporting');
-// const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
+const reporting = require('zigbee-herdsman-converters/lib/reporting');
+const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
 
 const e = exposes.presets;
 const ea = exposes.access;
@@ -41,6 +29,18 @@ const fz_gas_meter_converter = {
 					payload[property] = value * (factor ?? 1);
 			}
 
+			if (msg.data.status !== undefined) {
+				const value = msg.data['status'];
+				const property = utils.postfixWithEndpointName('status', msg, model, meta);
+				payload[property] = value;
+			}
+
+			if (msg.data.extendedStatus !== undefined) {
+				const value = msg.data['extendedStatus'];
+				const property = utils.postfixWithEndpointName('extended_status', msg, model, meta);
+				payload[property] = value;
+			}
+
 			return payload;
 	}
 };
@@ -57,11 +57,28 @@ const tz_current_summ_delivered = {
 		return {state: {gas_volume: value}};
 	},
 };
+
 const tz_instantaneous_demand = {
 	key: ['gas_flow_rate'],
 	convertGet: async (entity, key, meta) => {
 			utils.assertEndpoint(entity);
 			await utils.enforceEndpoint(entity, key, meta).read('seMetering', ['instantaneousDemand']);
+	},
+};
+
+const tz_status = {
+	key: ['status'],
+	convertGet: async (entity, key, meta) => {
+			utils.assertEndpoint(entity);
+			await utils.enforceEndpoint(entity, key, meta).read('seMetering', ['status']);
+	},
+};
+
+const tz_extended_status = {
+	key: ['extended_status'],
+	convertGet: async (entity, key, meta) => {
+			utils.assertEndpoint(entity);
+			await utils.enforceEndpoint(entity, key, meta).read('seMetering', ['extendedStatus']);
 	},
 };
 
@@ -98,14 +115,13 @@ function gasMeter(args) {
 			);
 	}
 
-	// let exposes = [e.battery(), e.battery_voltage()];
 	let exposes = [];
 	let fromZigbee;
 	let toZigbee;
 
 	const configureLookup = {
 			seMetering: {
-					// Report change with every 5W change
+					// Report change with every m³/h change
 					gas_flow_rate: {
 						attribute: 'instantaneousDemand', 
 						divisor: 'divisor', 
@@ -113,7 +129,7 @@ function gasMeter(args) {
 						forced: args.gas_flow_rate, 
 						change: 0.005
 					},
-					// Report change with every 0.1kWh change
+					// Report change with every m³ change
 					gas_volume: {
 						attribute: 'currentSummDelivered', 
 						divisor: 'divisor', 
@@ -121,6 +137,14 @@ function gasMeter(args) {
 						forced: args.gas_volume, 
 						change: 0.1
 					},
+					status: {
+						attribute: 'status', 
+						change: 1
+					},
+					extended_status: {
+						attribute: 'extendedStatus', 
+						change: 1
+					}
 			},
 	};
 
@@ -130,8 +154,8 @@ function gasMeter(args) {
 	if (args.gas_volume !== false) exposes.push(
 		e.numeric('gas_volume', ea.ALL).withUnit('m³').withDescription('Total gas consumption in m³')
 	);
-	fromZigbee = [fz_gas_meter_converter/*, fz.battery*/];
-	toZigbee = [tz_current_summ_delivered, tz_instantaneous_demand];
+	fromZigbee = [fz_gas_meter_converter, fz.battery];
+	toZigbee = [tz_current_summ_delivered, tz_instantaneous_demand, tz_status, tz_extended_status];
 
 
 	if (args.endpointNames) {
@@ -191,11 +215,11 @@ function gasMeter(args) {
 									}
 							}
 					},
-					// async (device, coordinatorEndpoint) => {
-					// 	const endpoint = device.getEndpoint(1);
-					// 	await reporting.bind(endpoint, coordinatorEndpoint, ['genPowerCfg']),
-					// 	await reporting.batteryPercentageRemaining(endpoint)
-					// }
+					async (device, coordinatorEndpoint) => {
+						const endpoint = device.getEndpoint(1);
+						await reporting.bind(endpoint, coordinatorEndpoint, ['genPowerCfg']),
+						await reporting.batteryPercentageRemaining(endpoint)
+					}
 			];
 	}
 
@@ -207,7 +231,7 @@ const definition = {
     model: 'GasMeter',
     vendor: 'MICASA',
     description: 'Zigbee Gas meter created by Ignacio Hernández-Ros',
-    extend: [gasMeter({"cluster":"metering"})],
+    extend: [gasMeter({"cluster":"metering"}), m.battery({voltage:true})],
     meta: {},
 };
 

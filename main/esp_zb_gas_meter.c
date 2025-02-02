@@ -147,6 +147,11 @@ static bool restart_deep_sleep = false;
 // be reset
 static bool can_restart_sleep = false;
 
+// flag to detect the user pressed main button while in
+// deep sleep mode and report is deferred to the moment
+// the radio is ready
+static bool deferred_main_btn_required_report = false;
+
 // When the main button is pressed a one time task is started
 // to detect a long press without having to wait until
 // the user releases the button
@@ -401,7 +406,6 @@ static esp_zb_zcl_status_t zb_radio_setup_report_values() {
 
 // report attributes to radio
 static void zb_radio_send_values() {
-    // this blows up the network anc causes all devices to become offline!
     esp_zb_zcl_report_attr_cmd_t report_attr_cmd = {0};
     report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
     report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
@@ -410,6 +414,7 @@ static void zb_radio_send_values() {
 
     if (gas_report) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID;
+        report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
 
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID;
@@ -425,16 +430,14 @@ static void zb_radio_send_values() {
     if (status_report) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
-        // Panic occurs when executing this line, don't know why so it is commented
-        // ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
 
     if (extended_status_report) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
-        // ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
-    
 }
 
 // Attribute handler
@@ -578,13 +581,6 @@ static void esp_zb_task(void *pvParameters) {
 
     ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_metering_server_cluster,
                                         ESP_ZB_ZCL_CLUSTER_ID_METERING,
-                                        ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID,
-                                        ESP_ZB_ZCL_ATTR_TYPE_64BITMAP,  // Tipo uint64_t
-                                        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY /*| ESP_ZB_ZCL_ATTR_ACCESS_REPORTING*/,
-                                        &device_extended_status));
-
-    ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_metering_server_cluster,
-                                        ESP_ZB_ZCL_CLUSTER_ID_METERING,
                                         ESP_ZB_ZCL_ATTR_METERING_UNIT_OF_MEASURE_ID,
                                         ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
                                         ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
@@ -603,6 +599,13 @@ static void esp_zb_task(void *pvParameters) {
                                         ESP_ZB_ZCL_ATTR_TYPE_U8,  // Tipo uint8_t
                                         ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
                                         &metering_device_type));
+
+    ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_metering_server_cluster,
+                                        ESP_ZB_ZCL_CLUSTER_ID_METERING,
+                                        ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID,
+                                        ESP_ZB_ZCL_ATTR_TYPE_64BITMAP,  // Tipo uint64_t
+                                        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+                                        &device_extended_status));
 
     // Multiplier attribute
     ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_metering_server_cluster,
@@ -660,27 +663,6 @@ static void esp_zb_task(void *pvParameters) {
 
     esp_zb_core_action_handler_register(zb_action_handler);
 
-    /* Config the reporting info  */
-    // esp_zb_zcl_reporting_info_t current_summation_delivered_reporting_info = {
-    //     .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-    //     .ep = MY_METERING_ENDPOINT,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .attr_id = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
-    //     .flags = 0x0,
-    //     .run_time = 0x00,
-    //     .u.send_info.min_interval = 10,
-    //     .u.send_info.max_interval = 60,
-    //     .u.send_info.delta.u48 = {
-    //         .low = 1,
-    //         .high = 0
-    //     },
-    //     .u.send_info.reported_value.u48 = current_summation_delivered,
-    //     .u.send_info.def_min_interval = 5,
-    //     .u.send_info.def_max_interval = 30,
-    //     .dst.endpoint = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    // };
     esp_zb_zcl_attr_location_info_t current_summation_delivered_location_info = {
         .attr_id = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
@@ -689,69 +671,25 @@ static void esp_zb_task(void *pvParameters) {
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
     };
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(current_summation_delivered_location_info));
-    esp_zb_zcl_reporting_info_t *current_summation_delivered_reporting_info = esp_zb_zcl_find_reporting_info(current_summation_delivered_location_info);
-    current_summation_delivered_reporting_info->u.send_info.min_interval = 10;
-    current_summation_delivered_reporting_info->u.send_info.max_interval = 60;
-    ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(current_summation_delivered_reporting_info));
 
-    esp_zb_zcl_reporting_info_t instantaneous_demand_reporting_info = {
-        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-        .ep = MY_METERING_ENDPOINT,
+    esp_zb_zcl_attr_location_info_t instantaneous_demand_location_info = {
+        .attr_id = ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID,
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
         .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        .attr_id = ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID,
-        .flags = 0x0,
-        .run_time = 0x00,
-        .u.send_info.min_interval = 10,
-        .u.send_info.max_interval = 60,
-        .u.send_info.delta.s24 = {
-            .low = 1,
-            .high = 0
-        },
-        .u.send_info.reported_value.s24 = instantaneous_demand,
-        .u.send_info.def_min_interval = 5,
-        .u.send_info.def_max_interval = 30,
-        .dst.endpoint = MY_METERING_ENDPOINT,
-        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+        .endpoint_id = MY_METERING_ENDPOINT,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
     };
-    ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&instantaneous_demand_reporting_info));
+    ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(instantaneous_demand_location_info));
 
-    esp_zb_zcl_reporting_info_t percentage_reporting_info = {
-        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-        .ep = MY_METERING_ENDPOINT,
+    esp_zb_zcl_attr_location_info_t  percentage_location_info = {
+        .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
         .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
-        .flags = 0x0,
-        .run_time = 0x00,
-        .u.send_info.min_interval = 3600,
-        .u.send_info.max_interval = (uint16_t)86400,
-        .u.send_info.delta.u8 = 1,
-        .u.send_info.reported_value.u8 = battery_percentage,
-        .u.send_info.def_min_interval = 3600,
-        .u.send_info.def_max_interval = (uint16_t)86400,
-        .dst.endpoint = MY_METERING_ENDPOINT,
-        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+        .endpoint_id = MY_METERING_ENDPOINT,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
     };
-    ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&percentage_reporting_info));
+    ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(percentage_location_info));
 
-    // esp_zb_zcl_reporting_info_t status_reporting_info = {
-    //     .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-    //     .ep = MY_METERING_ENDPOINT,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .attr_id = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID,
-    //     .flags = 0x0,
-    //     .run_time = 0x00,
-    //     .u.send_info.min_interval = 3600,
-    //     .u.send_info.max_interval = (uint16_t)86400,
-    //     .u.send_info.delta.u8 = 1,
-    //     .u.send_info.reported_value.u8 = device_status,
-    //     .u.send_info.def_min_interval = 3600,
-    //     .u.send_info.def_max_interval = (uint16_t)86400,
-    //     .dst.endpoint = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    // };
     esp_zb_zcl_attr_location_info_t status_location_info = {
         .attr_id = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID,
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
@@ -760,29 +698,15 @@ static void esp_zb_task(void *pvParameters) {
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
     };
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(status_location_info));
-    esp_zb_zcl_reporting_info_t *status_reporting_info = esp_zb_zcl_find_reporting_info(status_location_info);
-    status_reporting_info->u.send_info.min_interval = 3600;
-    status_reporting_info->u.send_info.max_interval = (uint16_t)86400;
-    ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(status_reporting_info));
 
-    // esp_zb_zcl_reporting_info_t extended_status_reporting_info = {
-    //     .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-    //     .ep = MY_METERING_ENDPOINT,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .attr_id = ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID,
-    //     .flags = 0x0,
-    //     .run_time = 0x00,
-    //     .u.send_info.min_interval = 0,
-    //     .u.send_info.max_interval = (uint16_t)0,
-    //     .u.send_info.delta.u16 = 0,
-    //     .u.send_info.reported_value.u16 = 0, // zigbee ESP-IDF bug, esp_zb_zcl_attr_var_u can't handle 64 bit value
-    //     .u.send_info.def_min_interval = 0,
-    //     .u.send_info.def_max_interval = (uint16_t)0,
-    //     .dst.endpoint = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
-    // };
-    // ESP_ERROR_CHECK(esp_zb_zcl_update_reporting_info(&extended_status_reporting_info));
+    esp_zb_zcl_attr_location_info_t extended_status_location_info = {
+        .attr_id = ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
+        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .endpoint_id = MY_METERING_ENDPOINT,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
+    };
+    ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(extended_status_location_info));
 
     esp_zb_set_tx_power(-15);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
@@ -884,6 +808,14 @@ static void gm_main_loop_task(void *arg) {
         // check_gpio_time is set to true
         // note, if PULSE_PIN goes down due to interrupt failing, then
         // it is reset to false during interrupt handling
+        if (deferred_main_btn_required_report) {
+            deferred_main_btn_required_report = false;
+            restart_deep_sleep = true;
+            gas_report = true;
+            battery_report = true;
+            status_report = true;
+            extended_status_report = true;
+        }
         if (check_gpio_time) {
             check_gpio_time = false;
             int level = gpio_get_level(PULSE_PIN);
@@ -1156,6 +1088,8 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg) {
             battery_report = true;
             status_report = true;
             extended_status_report = true;
+        } else {
+            deferred_main_btn_required_report = true;
         }
     }
     if (level == 0) {
