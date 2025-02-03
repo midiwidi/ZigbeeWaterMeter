@@ -43,6 +43,20 @@ After searching for commercial Zigbee gas meters and finding none, I decided to 
 
 ![Old device](images/small_gas_counter.png)
 
+## Project Status
+
+This project is still in the development phase. While it is not yet deployed for real gas consumption measurement, I have a working prototype on an **ESP32-C6-WROOM-1 development board** in a test environment. The prototype uses two buttons: one simulating the gas meter pulses and the other functioning as the main device button. The software is operational, but several key aspects are still under development.
+
+### What is missing and how you can help
+
+See the **TODO** section below for specific tasks that need to be completed.
+
+One of my main concerns is **power consumption and battery life**. While the software includes battery status reporting, I have not yet implemented battery level measurement, nor do I have the necessary hardware to do so. I have acquired some components to analyze the processor’s power consumption, which will help optimize battery usage.
+
+Currently, the prototype runs on a development board, but the long-term goal is to use only the **ESP32-C6 chip**, eliminating unnecessary components. To achieve this, I will need help reviewing schematics and PCB designs, as **I’m not an expert in hardware design—just an enthusiast**. If you have experience in this area, your input would be greatly appreciated.
+
+For discussions and contributions, please join the ongoing thread on the Home Assistant Community: 👉 [Zigbee Gas Counter](https://community.home-assistant.io/t/zigbee-gas-counter/833557)
+
 ## Getting Started
 
 ### Required Hardware
@@ -142,10 +156,10 @@ If you want to contribute or improve this project, feel free to fork the reposit
 
 Here are the planned improvements:
 
-1. Implement battery monitoring and reporting via Zigbee.
-1. Design a custom PCB for the ESP32-C6, connectors, and resistors.
-1. Create a 3D-printed enclosure for secure installation.
-1. OTA support.
+1. Implement battery measuring.
+2. Design a custom PCB for the ESP32-C6, connectors and resistors.
+3. Create a 3D-printed enclosure for secure installation.
+4. OTA support.
 
 ## Acknowledgments
 
