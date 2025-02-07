@@ -1,6 +1,8 @@
 notes/
 build/
 managed_components/
+consumption-measures/
+hardware/
 .vscode/
 sdkconfig.old
 start_mosquitto.sh
