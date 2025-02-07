@@ -44,9 +44,11 @@
 #define NVS_NAMESPACE                   "gas_monitor"
 #define NVS_KEY                         "counter"
 
-#define SLEEP_WAKEUP_INTERVAL_SEC       (3 * 60) // 0.5 hour (1800 seconds)
+#define SLEEP_WAKEUP_INTERVAL_SEC       (60 * 60) // 1 hour in seconds
 #define COUNTER_REPORT_DIFF             (10) // maximum difference between internal counter and last reported counter value
-#define TIME_TO_SLEEP                   (30) // 5 seconds. this was 2 minutes
+#define TIME_TO_SLEEP_ZIGBEE_ON         (30) // seconds
+#define TIME_TO_SLEEP_ZIGBEE_OFF        (3) // seconds
+#define MUST_SYNC_MINIMUM_TIME          (24 * 60 * 60) // 1 day in seconds
 
 #define LONG_PRESS_TIMEOUT              5 // seconds
 
@@ -300,12 +302,12 @@ void gm_counter_reset()
 // - counter increased 10 times
 void check_shall_enable_radio() 
 {
-    if (!shall_disable_radio && !zigbee_enabled) {
+    if (!shall_enable_radio && !shall_disable_radio && !zigbee_enabled) {
         if (last_report_sent_time.tv_sec != 0 || last_report_sent_time.tv_usec != 0) {
             struct timeval now;
             gettimeofday(&now, NULL);
             int time_diff_s = (now.tv_sec  - last_report_sent_time.tv_sec ) + (now.tv_usec - last_report_sent_time.tv_usec) / 1000000;
-            shall_enable_radio = time_diff_s >= SLEEP_WAKEUP_INTERVAL_SEC;
+            shall_enable_radio = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
         }
         if (!shall_enable_radio && last_summation_sent > 0) {
             uint64_t current_summation_64 = current_summation_delivered.high;
@@ -315,7 +317,6 @@ void check_shall_enable_radio()
         }
         if (shall_enable_radio) {
             current_summation_delivered_report = true;
-            ignore_enter_sleep = true;
         }
     }
 }
@@ -733,8 +734,8 @@ static void esp_zb_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(current_summation_delivered_location_info));
     esp_zb_zcl_reporting_info_t *current_summation_reporting_info = esp_zb_zcl_find_reporting_info(current_summation_delivered_location_info);
-    current_summation_reporting_info->u.send_info.max_interval = SLEEP_WAKEUP_INTERVAL_SEC;
-    current_summation_reporting_info->u.send_info.min_interval = TIME_TO_SLEEP / 2;
+    current_summation_reporting_info->u.send_info.max_interval = (u_int16_t)MUST_SYNC_MINIMUM_TIME;
+    current_summation_reporting_info->u.send_info.min_interval = TIME_TO_SLEEP_ZIGBEE_ON / 2;
     esp_zb_uint48_t current_summation_reporting_delta = {
         .low = COUNTER_REPORT_DIFF,
         .high = 0
@@ -829,21 +830,22 @@ static void longpress_cb(void* arg)
     }
 }
 
+static int dm_deep_sleep_time() {
+    const int before_deep_sleep_time_sec = zigbee_enabled || shall_enable_radio ? TIME_TO_SLEEP_ZIGBEE_ON : TIME_TO_SLEEP_ZIGBEE_OFF;
+    ESP_LOGI(TAG, "Start one-shot timer for %ds to enter the deep sleep", before_deep_sleep_time_sec);
+    return before_deep_sleep_time_sec;
+}
+
 // start timer to sleep
 static void gm_deep_sleep_start(void)
 {
-    /* Start the one-shot timer */
-    const int before_deep_sleep_time_sec = TIME_TO_SLEEP;
-    ESP_LOGI(TAG, "Start one-shot timer for %ds to enter the deep sleep", before_deep_sleep_time_sec);
-    ESP_ERROR_CHECK(esp_timer_start_once(deep_sleep_timer, before_deep_sleep_time_sec * 1000000));
+    ESP_ERROR_CHECK(esp_timer_start_once(deep_sleep_timer, dm_deep_sleep_time() * 1000000));
 }
 
 // restart timer to sleep to a new period
 static void gm_deep_sleep_restart(void)
 {
-    const int before_deep_sleep_time_sec = TIME_TO_SLEEP;
-    ESP_LOGI(TAG, "Restart one-shot timer for %ds to enter the deep sleep", before_deep_sleep_time_sec);
-    ESP_ERROR_CHECK(esp_timer_restart(deep_sleep_timer, before_deep_sleep_time_sec * 1000000));
+    ESP_ERROR_CHECK(esp_timer_restart(deep_sleep_timer, dm_deep_sleep_time() * 1000000));
 }
 
 static void gm_deep_sleep_start_or_restart(void)
@@ -912,7 +914,7 @@ static void gm_update_instantaneous_demand_task() {
         return;
     }
     int64_t time_diff_ms = (current_time - last_instant_demand_calculated_time) / 1000;
-    if (time_diff_ms > (TIME_TO_SLEEP - 2)*1000) {
+    if (time_diff_ms > (TIME_TO_SLEEP_ZIGBEE_ON - 2)*1000) {
         // this is sending values to decrease the instantaneous demand curve, but takes
         // too long to reach 0 so the device never enters deep sleep.
         // Either, remove instant_demand attribute from cluster because it
@@ -941,7 +943,7 @@ static void gm_main_loop_task(void *arg)
     while (true) {
         gm_update_instantaneous_demand_task();
         if (deferred_main_btn_required_report) {
-            ESP_LOGI(TAG, "deferred_main_btn_required_report");
+            ESP_LOGD(TAG, "deferred_main_btn_required_report");
             deferred_main_btn_required_report = false;
             shall_enable_radio = true;
             restart_deep_sleep = true;
@@ -953,7 +955,7 @@ static void gm_main_loop_task(void *arg)
             extended_status_report = true;
         }
         if (check_gpio_time) {
-            ESP_LOGI(TAG, "check_gpio_time");
+            ESP_LOGD(TAG, "check_gpio_time");
             check_gpio_time = false;
             int level = gpio_get_level(PULSE_PIN);
             // if PULSE_PIN is low AND check_gpio_time is true we 
@@ -967,28 +969,28 @@ static void gm_main_loop_task(void *arg)
             }
         }
         if (save_counter_nvr) {
-            ESP_LOGI(TAG, "save_counter_nvr");
+            ESP_LOGD(TAG, "save_counter_nvr");
             gm_counter_save_nvs();
             restart_deep_sleep = true;
         }
         if (restart_deep_sleep) {
-            ESP_LOGI(TAG, "restart_deep_sleep");
+            ESP_LOGD(TAG, "restart_deep_sleep");
             restart_deep_sleep = false;
             gm_deep_sleep_start_or_restart();
         }
         if (start_long_press_detector) {
-            ESP_LOGI(TAG, "start_long_press_detector");
+            ESP_LOGD(TAG, "start_long_press_detector");
             start_long_press_detector = false;
             btn_longpress_start();
         }
         if (stop_long_press_detector) {
-            ESP_LOGI(TAG, "stop_long_press_detector");
+            ESP_LOGD(TAG, "stop_long_press_detector");
             stop_long_press_detector = false;
             btn_longpress_stop();
         }
         check_shall_enable_radio();
         if (shall_enable_radio && !zigbee_enabled) {
-            ESP_LOGI(TAG, "shall_enable_radio");
+            ESP_LOGD(TAG, "shall_enable_radio");
             shall_enable_radio = false;
             zigbee_enabled = true;
             esp_zb_platform_config_t config = {
@@ -1004,21 +1006,21 @@ static void gm_main_loop_task(void *arg)
             ESP_ERROR_CHECK(xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, 5, NULL) != pdTRUE);
         }
         if (shall_disable_radio) {
-            ESP_LOGI(TAG, "shall_disable_radio");
+            ESP_LOGD(TAG, "shall_disable_radio");
             // TODO:
             shall_disable_radio = false;
             zigbee_enabled = false;
         }
         if (magnet_debounced) {
-            ESP_LOGI(TAG, "Magnet debounced");
+            ESP_LOGD(TAG, "Magnet debounced");
             magnet_debounced = false;
         }
         if (magnet_down) {
-            ESP_LOGI(TAG, "Magnet released");
+            ESP_LOGD(TAG, "Magnet released");
             magnet_down = false;
         }
         if (magnet_up) {
-            ESP_LOGI(TAG, "Magnet pressed");
+            ESP_LOGD(TAG, "Magnet pressed");
             magnet_up = false;
         }
         vTaskDelay(pdMS_TO_TICKS(250));
@@ -1101,7 +1103,7 @@ static void gm_deep_sleep_init(void)
             bool resolved = false;
             int level = gpio_get_level(MAIN_BTN);
             if (level == 1) { // wakeup from MAIN_BTN
-                ESP_LOGI(TAG, "Wake up from BUTTON. Time spent in deep sleep and boot: %dms", sleep_time_ms);
+                ESP_LOGI(TAG, "Wake up from MAIN BUTTON. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 start_long_press_detector = true;
                 started_from_deep_sleep = true;
                 shall_enable_radio = true;
@@ -1114,6 +1116,7 @@ static void gm_deep_sleep_init(void)
                 ESP_LOGI(TAG, "Wake up from GAS DETECTOR. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 gpio_time = esp_timer_get_time();
                 check_gpio_time = true;
+                ignore_enter_sleep = true;
                 resolved = true;
             }
             if (!resolved) {
@@ -1133,7 +1136,10 @@ static void gm_deep_sleep_init(void)
 
     /* Set the methods of how to wake up: */
     /* 1. RTC timer waking-up */
-    const uint64_t wakeup_time_sec = SLEEP_WAKEUP_INTERVAL_SEC;
+    int report_time_s = (now.tv_sec  - last_report_sent_time.tv_sec ) + 
+                    (now.tv_usec - last_report_sent_time.tv_usec) / 1000000;
+
+    const uint64_t wakeup_time_sec = MUST_SYNC_MINIMUM_TIME - report_time_s;
     ESP_LOGI(TAG, "Enabling timer wakeup, %llds", wakeup_time_sec);
     ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
 
