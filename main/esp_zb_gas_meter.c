@@ -9,7 +9,7 @@
  * You may use, modify, and share this work for personal and non-commercial purposes, as long
  * as you credit the original author(s) and share any derivatives under the same license.
  */
-
+#include <string.h>
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/gpio.h"
@@ -21,14 +21,52 @@
 #include "esp_timer.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_power_config.h"
+#include "zcl/esp_zigbee_zcl_metering.h"
 #include "hal/ieee802154_ll.h"
+#include "esp_adc/adc_continuous.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+
+/* Experimental, check if we sleepy device can help the design */
+#ifdef CONFIG_PM_ENABLE
+#include "esp_pm.h"
+#include "esp_private/esp_clk.h"
+#include "esp_sleep.h"
+#endif
 
 /* Hardware configuration */
+
+// input - pin with gas magnetic sensor contact
 #define PULSE_PIN                       GPIO_NUM_2
-#define MAIN_BTN                      GPIO_NUM_4
+
+// input - pin for the main button
+#define MAIN_BTN                        GPIO_NUM_4
+
+// output - pin to enable battery voltage to the adc converter
 #define BAT_MON_ENABLE                  GPIO_NUM_6
+
+// input - pin to measure battery voltage
 #define BAT_VLTG                        GPIO_NUM_0
+
+// amount of time to ignore a digital input pin interrupt repetition
 #define DEBOUNCE_TIMEOUT                50 /* milliseconds */
+
+/* Human interaction and device configuration */
+
+// Maximum difference between the internal counter value and last reported counter value
+#define COUNTER_REPORT_DIFF             (10)
+
+// time to send the device to deep sleep when Zigbee radio is on
+#define TIME_TO_SLEEP_ZIGBEE_ON         (30 * 1000) // milliseconds
+
+// time to send the device to deep sleep when Zigbee radio is off
+#define TIME_TO_SLEEP_ZIGBEE_OFF        (500) // milliseconds
+
+// Maximum time to force a device report
+#define MUST_SYNC_MINIMUM_TIME          (24 * 60 * 60) // 1 day in seconds
+
+// How long the MAIN BUTTON must be pressed to consider a LONG PRESS
+#define LONG_PRESS_TIMEOUT              5 // seconds
 
 /* Zigbee configuration */
 #define ED_AGING_TIMEOUT                ESP_ZB_ED_AGING_TIMEOUT_64MIN
@@ -44,13 +82,8 @@
 #define NVS_NAMESPACE                   "gas_monitor"
 #define NVS_KEY                         "counter"
 
-#define SLEEP_WAKEUP_INTERVAL_SEC       (60 * 60) // 1 hour in seconds
-#define COUNTER_REPORT_DIFF             (10) // maximum difference between internal counter and last reported counter value
-#define TIME_TO_SLEEP_ZIGBEE_ON         (30) // seconds
-#define TIME_TO_SLEEP_ZIGBEE_OFF        (3) // seconds
-#define MUST_SYNC_MINIMUM_TIME          (24 * 60 * 60) // 1 day in seconds
-
-#define LONG_PRESS_TIMEOUT              5 // seconds
+/* ADC Battery measurement */
+#define BAT_BUFFER_READ_LEN             256
 
 static const char *TAG = "MICASA_GAS_METER";
 
@@ -60,9 +93,6 @@ static esp_zb_uint48_t current_summation_delivered = {
     .high = 0
 };
 
-// device version
-// static uint8_t version = 0;
-
 static uint8_t alarm_mask = 0x03;
 static uint8_t generic_device_type = 0xFF;
 
@@ -71,11 +101,11 @@ static uint8_t device_status = 0x0;
 static uint64_t device_extended_status = 0x0;
 
 // changed to true when the value of device_status changes
-// so value must be sent up to parent
+// so value must be reported
 static bool status_report = false;
 
 // changed to true when the value of device_extended_status changes
-// so value must be sent up to parent
+// so value must be reported
 static bool extended_status_report = false;
 
 // Measure instantaneous demand as int24
@@ -85,7 +115,7 @@ static esp_zb_int24_t instantaneous_demand = {
 };
 
 // m³
-static uint8_t unit_of_measure = 0x01; 
+static uint8_t unit_of_measure = ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY; 
 
 // 1 m³ for every 100 pulses
 static esp_zb_uint24_t multiplier = {
@@ -123,14 +153,14 @@ static uint16_t identify_time = 0;
 // shall update them to parent device
 static bool current_summation_delivered_report = false;
 
-// set to true when the attribute values have changed and this device
-// shall update them to parent device
-static bool instantaneous_demand_report = false;
-
 // changes from false to true when the counter has been sent to the
 // parent device and the new value is stored
 // changes from true to false when a new value is set to the counter
-static bool value_sent = false;
+static bool current_summation_delivered_sent = false;
+
+// set to true when the attribute values have changed and this device
+// shall update them to parent device
+static bool instantaneous_demand_report = false;
 
 // set to true when the counter has changed value and the new value
 // needs to be stored to nvr
@@ -175,14 +205,6 @@ static bool start_long_press_detector = false;
 static bool started_from_deep_sleep = false;
 static bool stop_long_press_detector = false;
 
-// TODO: measure this
-static uint8_t battery_voltage = 33;
-static uint8_t battery_percentage = 95*2;
-
-// when set to true the battery percentage will be included 
-// in the next report
-static bool battery_report = false;
-
 // set to true when PULSE_PIN raises. Prevents the deep slep
 // to enter when the device is in the middle of a clycle count
 // NOTE: observations says that the pulse takes between 
@@ -226,6 +248,26 @@ static bool zigbee_enabled = false;
 static bool magnet_debounced = false;
 static bool magnet_down = false;
 static bool magnet_up = false;
+
+/* Battery related variables */
+
+static adc_channel_t channel = ADC_CHANNEL_3; // GPIO 3
+static adc_continuous_handle_t handle = NULL;
+static TaskHandle_t s_task_handle;
+
+// last time battery voltage was adquired 
+static RTC_DATA_ATTR struct timeval last_battery_measurement_time;
+
+// turned to true when a new measure has to be obtained
+static bool shall_measure_battery = false;
+
+// values to be sent to zigbee
+static RTC_DATA_ATTR uint8_t battery_voltage = 84;
+static RTC_DATA_ATTR uint8_t battery_percentage = 100*2;
+
+// when set to true the battery percentage will be included 
+// in the next report
+static bool battery_report = false;
 
 // Load counter value from NVS
 esp_err_t gm_counter_load_nvs() 
@@ -279,7 +321,7 @@ void gm_counter_set(esp_zb_uint48_t *new_value)
 {
     current_summation_delivered.low = new_value->low;
     current_summation_delivered.high = new_value->high;
-    value_sent = false;
+    current_summation_delivered_sent = false;
     save_counter_nvr = true;
     gm_counter_save_nvs();
     ESP_LOGI(TAG, "Counter value set to:low=%lu high=%d", current_summation_delivered.low, current_summation_delivered.high);
@@ -321,6 +363,25 @@ void check_shall_enable_radio()
     }
 }
 
+// Computes if it is needed to measure battery voltage
+void check_shall_measure_battery()
+{
+    if (last_battery_measurement_time.tv_sec == 0 && last_battery_measurement_time.tv_usec == 0) {
+        shall_measure_battery = true;
+    } else {
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        int time_diff_s = (now.tv_sec  - last_battery_measurement_time.tv_sec ) + (now.tv_usec - last_battery_measurement_time.tv_usec) / 1000000;
+        shall_measure_battery = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
+    }
+    if (shall_measure_battery) {
+        // battery voltage is measured with zigbee radio 
+        // turned on
+        shall_enable_radio = true;
+        current_summation_delivered_report = true;
+    }
+}
+
 // Adds one to current_summation_delivered and nothing else
 void gm_counter_increment()
 {
@@ -328,7 +389,7 @@ void gm_counter_increment()
     if (current_summation_delivered.low == 0) {
         current_summation_delivered.high += 1;
     }
-    value_sent = false;
+    current_summation_delivered_sent = false;
 }
 
 // response to the ESP_ZB_CORE_REPORT_ATTR_CB_ID callback
@@ -406,7 +467,8 @@ static esp_err_t zb_configure_report_resp_handler(const esp_zb_zcl_cmd_config_re
 }
 
 // transfer values from variables to zigbee radio
-static esp_zb_zcl_status_t zb_radio_setup_report_values() {
+static esp_zb_zcl_status_t zb_radio_setup_report_values() 
+{
     esp_zb_zcl_status_t status = ESP_ZB_ZCL_STATUS_SUCCESS;
     if (current_summation_delivered_report) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
@@ -534,7 +596,7 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
                     msg->info.cluster, msg->info.profile);
         ESP_LOGI(TAG, "   Resp status: 0x%04x, frame control: 0x%02x, mfg code: 0x%04x, txn: %d, RSSI: %d",
                     msg->info.status, msg->info.header.fc, msg->info.header.manuf_code, msg->info.header.tsn, msg->info.header.rssi);
-        value_sent = true;
+        current_summation_delivered_sent = true;
         ret = ESP_OK;
         break;
     default:
@@ -557,6 +619,7 @@ static void esp_zb_task(void *pvParameters)
             .keep_alive = ED_KEEP_ALIVE,    // 3 seconds
         },
     };
+    esp_zb_sleep_enable(true);
     ESP_LOGI(TAG, "esp_zb_init...");
     esp_zb_init(&zb_nwk_cfg);
 
@@ -616,8 +679,8 @@ static void esp_zb_task(void *pvParameters)
                                         &battery_percentage));
 
     /* metering cluster */
-    esp_zb_attribute_list_t *esp_zb_metering_server_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_METERING);
 
+    // This code can't be used because current_summation_delivered reporting can't be configured
     // esp_zb_metering_cluster_cfg_t metering_cfg = {
     //     .current_summation_delivered = current_summation_delivered,
     //     .status = device_status,
@@ -626,6 +689,8 @@ static void esp_zb_task(void *pvParameters)
     //     .metering_device_type = metering_device_type
     // };
     // esp_zb_attribute_list_t *esp_zb_metering_server_cluster = esp_zb_metering_cluster_create(&metering_cfg);
+
+    esp_zb_attribute_list_t *esp_zb_metering_server_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_METERING);
 
     ESP_ERROR_CHECK(esp_zb_cluster_add_attr(esp_zb_metering_server_cluster,
                                         ESP_ZB_ZCL_CLUSTER_ID_METERING,
@@ -782,7 +847,6 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_set_tx_power(IEEE802154_TXPOWER_VALUE_MIN);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
     esp_zb_set_secondary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
-    esp_zb_sleep_enable(true);
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_stack_main_loop();
@@ -807,6 +871,7 @@ static void enter_deep_sleep_cb(void* arg)
     }
 }
 
+// function called when the device leaves the zigee network
 void leave_callback(esp_zb_zdp_status_t zdo_status, void* args)
 {
     ESP_LOGI(TAG, "Leave status 0x%x", zdo_status);
@@ -830,24 +895,27 @@ static void longpress_cb(void* arg)
     }
 }
 
-static int dm_deep_sleep_time() {
+// Compute how long to wait for sleep depending on device conditions
+static int dm_deep_sleep_time_ms() {
     const int before_deep_sleep_time_sec = zigbee_enabled || shall_enable_radio ? TIME_TO_SLEEP_ZIGBEE_ON : TIME_TO_SLEEP_ZIGBEE_OFF;
-    ESP_LOGI(TAG, "Start one-shot timer for %ds to enter the deep sleep", before_deep_sleep_time_sec);
+    ESP_LOGI(TAG, "Start one-shot timer for %dms to enter the deep sleep", before_deep_sleep_time_sec );
     return before_deep_sleep_time_sec;
 }
 
 // start timer to sleep
 static void gm_deep_sleep_start(void)
 {
-    ESP_ERROR_CHECK(esp_timer_start_once(deep_sleep_timer, dm_deep_sleep_time() * 1000000));
+    ESP_ERROR_CHECK(esp_timer_start_once(deep_sleep_timer, dm_deep_sleep_time_ms() * 1000));
 }
 
 // restart timer to sleep to a new period
 static void gm_deep_sleep_restart(void)
 {
-    ESP_ERROR_CHECK(esp_timer_restart(deep_sleep_timer, dm_deep_sleep_time() * 1000000));
+    ESP_ERROR_CHECK(esp_timer_restart(deep_sleep_timer, dm_deep_sleep_time_ms() * 1000));
 }
 
+// entry point to restart (or start) the deep sleep timer
+// this entry point is save as it checks the time status first
 static void gm_deep_sleep_start_or_restart(void)
 {
     if (esp_timer_is_active(deep_sleep_timer))
@@ -856,6 +924,7 @@ static void gm_deep_sleep_start_or_restart(void)
         gm_deep_sleep_start();
 }
 
+// Stops the timer responsible of detecting MAIN BUTTON long press
 static void btn_longpress_stop(void) 
 {
     if (esp_timer_is_active(longpress_timer)) {
@@ -864,6 +933,7 @@ static void btn_longpress_stop(void)
     }
 }
 
+// Starts the timer responsible of detecting MAIN BUTTON long press
 static void btn_longpress_start(void) 
 {
     int before_longpress_time_sec = LONG_PRESS_TIMEOUT * 1000;
@@ -907,7 +977,8 @@ static void gm_compute_instantaneous_demand(struct timeval *now, bool save_time)
 }
 
 // update instantaneous demand to 0 when no pulses are received in a minute
-static void gm_update_instantaneous_demand_task() {
+static void gm_update_instantaneous_demand_task() 
+{
     int64_t current_time = esp_timer_get_time();
     if (last_instant_demand_calculated_time == 0) {
         last_instant_demand_calculated_time = current_time;
@@ -934,12 +1005,147 @@ static void gm_update_instantaneous_demand_task() {
     }
 }
 
+static bool IRAM_ATTR bat_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
+{
+    BaseType_t mustYield = pdFALSE;
+    //Notify that ADC continuous driver has done enough number of conversions
+    vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
+
+    return (mustYield == pdTRUE);
+}
+
+static esp_err_t bat_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+
+    ESP_LOGD(TAG, "calibration scheme version is Curve Fitting");
+    adc_cali_curve_fitting_config_t cali_config = {
+        .unit_id = unit,
+        .chan = channel,
+        .atten = atten,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGD(TAG, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return ret;
+}
+
+static void bat_adc_calibration_deinit(adc_cali_handle_t handle)
+{
+    ESP_LOGD(TAG, "deregister %s calibration scheme", "Curve Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+}
+
+static void bat_continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *out_handle)
+{
+    adc_continuous_handle_t handle = NULL;
+
+    adc_continuous_handle_cfg_t adc_config = {
+        .max_store_buf_size = 1024,
+        .conv_frame_size = BAT_BUFFER_READ_LEN,
+    };
+    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
+
+    adc_continuous_config_t dig_cfg = {
+        .pattern_num = 1,
+        .sample_freq_hz = 20 * 1000,
+        .conv_mode = ADC_CONV_SINGLE_UNIT_1,
+        .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
+    };
+
+    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
+    adc_pattern[0].atten = ADC_ATTEN_DB_12;
+    adc_pattern[0].channel = channel & 0x7;
+    adc_pattern[0].unit = ADC_UNIT_1;
+    adc_pattern[0].bit_width = ADC_BITWIDTH_12;
+    dig_cfg.adc_pattern = adc_pattern;
+    ESP_ERROR_CHECK(adc_continuous_config(handle, &dig_cfg));
+
+    *out_handle = handle;
+}
+
+void adc_task(void *arg)
+{
+    ESP_LOGI(TAG, "ADC Task Init...");
+    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+
+    bat_continuous_adc_init(channel, &handle);
+    adc_continuous_evt_cbs_t cbs = {
+        .on_conv_done = bat_conv_done_cb,
+    };
+    ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
+    ESP_ERROR_CHECK(adc_continuous_start(handle));
+    ESP_ERROR_CHECK(bat_adc_calibration_init(ADC_UNIT_1, channel, ADC_ATTEN_DB_12, &adc1_cali_chan0_handle));
+
+    uint8_t result[BAT_BUFFER_READ_LEN] = {0};
+    memset(result, 0xcc, BAT_BUFFER_READ_LEN);
+
+    /**
+     * This is to show you the way to use the ADC continuous mode driver event callback.
+     * This `ulTaskNotifyTake` will block when the data processing in the task is fast.
+     * However in this example, the data processing (print) is slow, so you barely block here.
+     *
+     * Without using this event callback (to notify this task), you can still just call
+     * `adc_continuous_read()` here in a loop, with/without a certain block timeout.
+     */
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    uint32_t ret_num = 0;
+    esp_err_t ret = adc_continuous_read(handle, result, BAT_BUFFER_READ_LEN, &ret_num, 0);
+    if (ret == ESP_OK) {
+        uint64_t total = 0;
+        int16_t values = 0;
+        for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
+            adc_digi_output_data_t *p = (adc_digi_output_data_t*)&result[i];
+            uint32_t chan_num = p->type2.channel;
+            /* Check the channel number validation, the data is invalid if the channel num exceed the maximum channel */
+            if (chan_num < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
+                uint32_t data = p->type2.data;
+                total += data;
+                values++;
+            }
+        }
+        if (values > 0) {
+            uint32_t average = total / values;
+            int voltage;
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, average, &voltage));
+            float bat_voltage = (float)(0.036585366)*voltage; // convert to 2s lipo ranges and mult by 10
+            battery_voltage = bat_voltage;
+            battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
+            battery_report = true;
+            ESP_LOGI(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
+                average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage);
+        }
+    } else if (ret == ESP_ERR_TIMEOUT) {
+        ESP_LOGE(TAG, "ADC Task ESP_ERR_TIMEOUT");
+        //We try to read `EXAMPLE_READ_LEN` until API returns timeout, which means there's no available data
+        // TODO: indicate in status that battery can't be read
+    }
+
+    bat_adc_calibration_deinit(adc1_cali_chan0_handle);
+    ESP_ERROR_CHECK(adc_continuous_stop(handle));
+    ESP_ERROR_CHECK(adc_continuous_deinit(handle));
+
+    vTaskDelete(NULL);
+}
+
 // device main loop activities, note
 // zigbee activities are not part of the
 // main loop, just the critical activities
 // to maintain the counter
 static void gm_main_loop_task(void *arg)
 {
+    ESP_LOGI(TAG, "Main Loop Task...");
     while (true) {
         gm_update_instantaneous_demand_task();
         if (deferred_main_btn_required_report) {
@@ -953,6 +1159,11 @@ static void gm_main_loop_task(void *arg)
             battery_report = true;
             status_report = true;
             extended_status_report = true;
+            shall_measure_battery = true;
+        }
+        if (shall_measure_battery) {
+            shall_measure_battery = false;
+            xTaskCreate(adc_task, "adc", 4096, NULL, tskIDLE_PRIORITY, &s_task_handle);
         }
         if (check_gpio_time) {
             ESP_LOGD(TAG, "check_gpio_time");
@@ -973,6 +1184,7 @@ static void gm_main_loop_task(void *arg)
             gm_counter_save_nvs();
             restart_deep_sleep = true;
         }
+        check_shall_enable_radio();
         if (restart_deep_sleep) {
             ESP_LOGD(TAG, "restart_deep_sleep");
             restart_deep_sleep = false;
@@ -988,7 +1200,6 @@ static void gm_main_loop_task(void *arg)
             stop_long_press_detector = false;
             btn_longpress_stop();
         }
-        check_shall_enable_radio();
         if (shall_enable_radio && !zigbee_enabled) {
             ESP_LOGD(TAG, "shall_enable_radio");
             shall_enable_radio = false;
@@ -1030,6 +1241,7 @@ static void gm_main_loop_task(void *arg)
 // end zigbee values up if there are changes in the measured values
 static void gm_main_loop_zigbee_task(void *arg) 
 {
+    ESP_LOGI(TAG, "Zigbee Loop Task...");
     while (true) {
         // if device was in deep sleep and woke up from PULSE_PIN rising
         // check_gpio_time is set to true
@@ -1133,6 +1345,7 @@ static void gm_deep_sleep_init(void)
             break;
     }
     check_shall_enable_radio();
+    check_shall_measure_battery();
 
     /* Set the methods of how to wake up: */
     /* 1. RTC timer waking-up */
@@ -1157,7 +1370,7 @@ static void gm_deep_sleep_init(void)
 static esp_err_t gm_tasks_init()
 {
     return (
-        xTaskCreate(gm_main_loop_zigbee_task, "sensor_quick_update", 4096, NULL, 10, NULL) == pdPASS
+        xTaskCreate(gm_main_loop_zigbee_task, "sensor_quick_update", 4096, NULL, tskIDLE_PRIORITY, NULL) == pdPASS
     ) ? ESP_OK : ESP_FAIL;
 }
 
@@ -1224,7 +1437,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 }
 
 // PULSE_PIN - GPIO Interruption handler
-void IRAM_ATTR gpio_pulse_isr_handler(void* arg) {
+void IRAM_ATTR gpio_pulse_isr_handler(void* arg) 
+{
     struct timeval now;
     gettimeofday(&now, NULL);
     int time_diff_ms = (now.tv_sec  - last_pulse_time.tv_sec ) * 1000 + 
@@ -1259,7 +1473,8 @@ void IRAM_ATTR gpio_pulse_isr_handler(void* arg) {
 }
 
 // MAIN_BTN - GPIO Interruption handler
-void IRAM_ATTR gpio_btn_isr_handler(void *arg) {
+void IRAM_ATTR gpio_btn_isr_handler(void *arg) 
+{
     int level = gpio_get_level(MAIN_BTN);
     int64_t current_time = esp_timer_get_time();
     int64_t time_diff_ms = (current_time - last_main_btn_time) / 1000;
@@ -1276,6 +1491,7 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg) {
             battery_report = true;
             status_report = true;
             extended_status_report = true;
+            shall_measure_battery = true;
         } else {
             deferred_main_btn_required_report = true;
         }
@@ -1293,7 +1509,8 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg) {
 // resistors aren't used so they are disabled.
 // In order to save battery I decided to use pull-down because this is
 // how the sensor should stay most of the time
-void gm_gpio_interrup_init() {
+void gm_gpio_interrup_init() 
+{
     uint64_t pulse_pin  = 1ULL << PULSE_PIN;
     uint64_t wakeup_pin = 1ULL << MAIN_BTN;
                                         //      __
@@ -1323,16 +1540,43 @@ void gm_gpio_interrup_init() {
     gpio_config(&voltage_enable_conf);
 }
 
+// configure power save
+static esp_err_t esp_zb_power_save_init(void)
+{
+    esp_err_t rc = ESP_OK;
+#ifdef CONFIG_PM_ENABLE
+    int cur_cpu_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = cur_cpu_freq_mhz,
+        .min_freq_mhz = cur_cpu_freq_mhz,
+#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
+        // TODO: explore why this causes a problem 
+        // When the device enters deep sleep after a 3s period
+        // caused by the counter going up one tick
+        // the device wakes up on RTC utomatically and this
+        // is not desired as it will turn on Zigbee radio
+        // as it is defined in code
+
+        // .light_sleep_enable = true
+#endif
+    };
+    rc = esp_pm_configure(&pm_config);
+#endif
+    return rc;
+}
+
 // Entry point
-void app_main(void) {
+void app_main(void) 
+{
     ESP_LOGI(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
     gm_gpio_interrup_init();
     ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_zb_power_save_init());
     ESP_ERROR_CHECK(gm_counter_load_nvs());
     gm_deep_sleep_init();
 
     // start main loop
-    ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, 5, NULL) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);
 }

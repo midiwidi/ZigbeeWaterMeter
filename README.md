@@ -45,13 +45,15 @@ After searching for commercial Zigbee gas meters and finding none, I decided to 
 
 ## Project Status
 
-This project is still in the development phase. While it is not yet deployed for real gas consumption measurement, I have a working prototype on an **ESP32-C6-WROOM-1 development board** in a test environment. The prototype uses two buttons: one simulating the gas meter pulses and the other functioning as the main device button. The software is operational, but several key aspects are still under development.
+This project is still in the development phase. While it is not yet deployed for real gas consumption measurement, I have a working prototype on an **ESP32-C6-WROOM-1 development board** in a test environment. The prototype uses two buttons: one simulating the gas meter pulses and the other functioning as the main device button. The software is fully operational, I'm actually working on the hardware side.
+
+For the time being, I've decided to use a 2S lipo battery that can hold 8.4v and can be safely discharged to 7.0v. I've already develop the software to report battery at 100% level when it is 8.4v and 0% when it is 7.0v. There is also an attribute to get the battery voltage in millivolts.
 
 ### What is missing and how you can help
 
 See the **TODO** section below for specific tasks that need to be completed.
 
-One of my main concerns is **power consumption and battery life**. While the software includes battery status reporting, I have not yet implemented battery level measurement, nor do I have the necessary hardware to do so. I have acquired some components to analyze the processor’s power consumption, which will help optimize battery usage.
+One of my main concerns is **power consumption and battery life**. The software includes battery status measuring and reporting.
 
 Currently, the prototype runs on a development board, but the long-term goal is to use only the **ESP32-C6 chip**, eliminating unnecessary components. To achieve this, I will need help reviewing schematics and PCB designs, as **I’m not an expert in hardware design—just an enthusiast**. If you have experience in this area, your input would be greatly appreciated.
 
@@ -66,7 +68,8 @@ To build this project, you’ll need:
 - **ESP32-C6-WROOM-1** or a compatible development board.
 - **Magnetic reed switch** for pulse detection.
 - **10kΩ resistor** (pull-down).
-- **3V CR123A battery**. TBD
+- **8.4 LiPo battery**. TBD
+- **DC to DC voltage step down**. I'm temporarily using an old MP1584 set to convert 8.4v to 3.3v.
 - Optional: Custom 3D-printed enclosure for the hardware.
 
 ### Software Requirements
