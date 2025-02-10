@@ -1183,6 +1183,8 @@ static void gm_main_loop_task(void *arg)
                 // last_pulse_time = gpio_time; // saved when interrupted (TODO: shall increment time during the estimated pulse high duration)
                 current_summation_delivered_report = true;
                 instantaneous_demand_report = true;
+                ignore_enter_sleep = false;
+                restart_deep_sleep = true;
             }
         }
         if (save_counter_nvr) {
