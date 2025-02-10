@@ -1364,6 +1364,8 @@ static void gm_deep_sleep_init(void)
     ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(
         gpio_wakeup_pin_mask_1 | gpio_wakeup_pin_mask_2, ESP_EXT1_WAKEUP_ANY_HIGH
     ));
+
+    esp_deep_sleep_disable_rom_logging();
 }
 
 // tasks definitions to satisfy reporting requirements
@@ -1568,6 +1570,7 @@ static esp_err_t esp_zb_power_save_init(void)
 // Entry point
 void app_main(void) 
 {
+    esp_log_level_set("*", ESP_LOG_ERROR);
     ESP_LOGI(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
