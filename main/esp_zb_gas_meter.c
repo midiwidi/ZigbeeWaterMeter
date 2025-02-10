@@ -398,7 +398,7 @@ static esp_err_t zb_attribute_reporting_handler(const esp_zb_zcl_report_attr_mes
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
     ESP_RETURN_ON_FALSE(message->status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->status);
-    ESP_LOGI(TAG, "Report received from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
+    ESP_LOGD(TAG, "Report received from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
              message->src_address.u.short_addr, message->src_endpoint,
              message->dst_endpoint, message->cluster);
     return ESP_OK;
@@ -411,13 +411,13 @@ static esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_m
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGI(TAG, "Read attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
+    ESP_LOGD(TAG, "Read attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
              message->info.src_address.u.short_addr, message->info.src_endpoint,
              message->info.dst_endpoint, message->info.cluster);
 
     esp_zb_zcl_read_attr_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGI(TAG, "Read attribute response: status(%d), cluster(0x%x), attribute(0x%x), type(0x%x), value(%d)",
+        ESP_LOGD(TAG, "Read attribute response: status(%d), cluster(0x%x), attribute(0x%x), type(0x%x), value(%d)",
                     variable->status, message->info.cluster,
                     variable->attribute.id, variable->attribute.data.type,
                     variable->attribute.data.value ? *(uint8_t *)variable->attribute.data.value : 0);
@@ -434,13 +434,13 @@ static esp_err_t zb_write_attr_resp_handler(const esp_zb_zcl_cmd_write_attr_resp
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
+    ESP_LOGD(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
              message->info.src_address.u.short_addr, message->info.src_endpoint,
              message->info.dst_endpoint, message->info.cluster);
 
     esp_zb_zcl_write_attr_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGI(TAG, "Write attribute response: status(%d), attribute(0x%x)",
+        ESP_LOGD(TAG, "Write attribute response: status(%d), attribute(0x%x)",
                     variable->status,
                     variable->attribute_id);
         variable = variable->next;
@@ -458,7 +458,7 @@ static esp_err_t zb_configure_report_resp_handler(const esp_zb_zcl_cmd_config_re
 
     esp_zb_zcl_config_report_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGI(TAG, "Configure report response: status(%d), cluster(0x%x), direction(0x%x), attribute(0x%x)",
+        ESP_LOGD(TAG, "Configure report response: status(%d), cluster(0x%x), direction(0x%x), attribute(0x%x)",
                  variable->status, message->info.cluster, variable->direction, variable->attribute_id);
         variable = variable->next;
     }
@@ -565,7 +565,7 @@ static void zb_radio_send_values()
 // Attribute handler
 static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message) 
 {
-    ESP_LOGI(TAG, "In zb_action_handler callback_id=0x%x", callback_id);
+    ESP_LOGD(TAG, "In zb_action_handler callback_id=0x%x", callback_id);
     esp_err_t ret = ESP_OK;
     switch (callback_id) {
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
@@ -590,11 +590,11 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
         break;
     case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
         esp_zb_zcl_cmd_default_resp_message_t *msg = (esp_zb_zcl_cmd_default_resp_message_t*)message;
-        ESP_LOGI(TAG, "Default Response: Status: 0x%04x, Command: %d", msg->status_code, msg->resp_to_cmd);
-        ESP_LOGI(TAG, "   Src addr: 0x%04x, Dst Addr: 0x%04x, src ep: %d, dst ep: %d, cluster: 0x%04x, profile: 0x%04x",
+        ESP_LOGD(TAG, "Default Response: Status: 0x%04x, Command: %d", msg->status_code, msg->resp_to_cmd);
+        ESP_LOGD(TAG, "   Src addr: 0x%04x, Dst Addr: 0x%04x, src ep: %d, dst ep: %d, cluster: 0x%04x, profile: 0x%04x",
                     msg->info.src_address.u.short_addr, msg->info.dst_address, msg->info.src_endpoint, msg->info.dst_endpoint,
                     msg->info.cluster, msg->info.profile);
-        ESP_LOGI(TAG, "   Resp status: 0x%04x, frame control: 0x%02x, mfg code: 0x%04x, txn: %d, RSSI: %d",
+        ESP_LOGD(TAG, "   Resp status: 0x%04x, frame control: 0x%02x, mfg code: 0x%04x, txn: %d, RSSI: %d",
                     msg->info.status, msg->info.header.fc, msg->info.header.manuf_code, msg->info.header.tsn, msg->info.header.rssi);
         current_summation_delivered_sent = true;
         ret = ESP_OK;
@@ -609,7 +609,7 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
 // initialize zigbee device
 static void esp_zb_task(void *pvParameters) 
 {
-    ESP_LOGI(TAG, "In esp_zb_task");
+    ESP_LOGD(TAG, "In esp_zb_task");
 
     esp_zb_cfg_t zb_nwk_cfg = {
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED, // End device
@@ -620,7 +620,7 @@ static void esp_zb_task(void *pvParameters)
         },
     };
     esp_zb_sleep_enable(true);
-    ESP_LOGI(TAG, "esp_zb_init...");
+    ESP_LOGD(TAG, "esp_zb_init...");
     esp_zb_init(&zb_nwk_cfg);
 
     esp_zb_basic_cluster_cfg_t basic_cfg = {
@@ -880,10 +880,10 @@ void leave_callback(esp_zb_zdp_status_t zdo_status, void* args)
 // long press detected
 static void longpress_cb(void* arg)
 {
-    ESP_LOGI(TAG, "Button long press detected");
+    ESP_LOGD(TAG, "Button long press detected");
     uint16_t short_address = esp_zb_get_short_address();
     if (short_address != 0xfffe) {
-        ESP_LOGI(TAG, "Leaving network");
+        ESP_LOGD(TAG, "Leaving network");
         esp_zb_zdo_mgmt_leave_req_param_t leave_request = {
             .device_address = {},
             .dst_nwk_addr = 0xFFFF,
@@ -898,7 +898,7 @@ static void longpress_cb(void* arg)
 // Compute how long to wait for sleep depending on device conditions
 static int dm_deep_sleep_time_ms() {
     const int before_deep_sleep_time_sec = zigbee_enabled || shall_enable_radio ? TIME_TO_SLEEP_ZIGBEE_ON : TIME_TO_SLEEP_ZIGBEE_OFF;
-    ESP_LOGI(TAG, "Start one-shot timer for %dms to enter the deep sleep", before_deep_sleep_time_sec );
+    ESP_LOGD(TAG, "Start one-shot timer for %dms to enter the deep sleep", before_deep_sleep_time_sec );
     return before_deep_sleep_time_sec;
 }
 
@@ -928,7 +928,7 @@ static void gm_deep_sleep_start_or_restart(void)
 static void btn_longpress_stop(void) 
 {
     if (esp_timer_is_active(longpress_timer)) {
-        ESP_LOGI(TAG, "Stop long press timer");
+        ESP_LOGD(TAG, "Stop long press timer");
         ESP_ERROR_CHECK(esp_timer_stop(longpress_timer));
     }
 }
@@ -940,7 +940,7 @@ static void btn_longpress_start(void)
     if (started_from_deep_sleep) {
         before_longpress_time_sec -= 2800; // measured time for the device to start
     }
-    ESP_LOGI(TAG, "Start long press timer for %dms", before_longpress_time_sec);
+    ESP_LOGD(TAG, "Start long press timer for %dms", before_longpress_time_sec);
     btn_longpress_stop();
     ESP_ERROR_CHECK(esp_timer_start_once(longpress_timer, before_longpress_time_sec * 1000));
 }
@@ -1076,7 +1076,7 @@ static void bat_continuous_adc_init(adc_channel_t channel, adc_continuous_handle
 
 void adc_task(void *arg)
 {
-    ESP_LOGI(TAG, "ADC Task Init...");
+    ESP_LOGD(TAG, "ADC Task Init...");
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
 
     bat_continuous_adc_init(channel, &handle);
@@ -1123,7 +1123,7 @@ void adc_task(void *arg)
             battery_voltage = bat_voltage;
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
             battery_report = true;
-            ESP_LOGI(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
+            ESP_LOGD(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
                 average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage);
         }
     } else if (ret == ESP_ERR_TIMEOUT) {
@@ -1145,7 +1145,7 @@ void adc_task(void *arg)
 // to maintain the counter
 static void gm_main_loop_task(void *arg)
 {
-    ESP_LOGI(TAG, "Main Loop Task...");
+    ESP_LOGD(TAG, "Main Loop Task...");
     while (true) {
         gm_update_instantaneous_demand_task();
         if (deferred_main_btn_required_report) {
@@ -1241,7 +1241,7 @@ static void gm_main_loop_task(void *arg)
 // end zigbee values up if there are changes in the measured values
 static void gm_main_loop_zigbee_task(void *arg) 
 {
-    ESP_LOGI(TAG, "Zigbee Loop Task...");
+    ESP_LOGD(TAG, "Zigbee Loop Task...");
     while (true) {
         // if device was in deep sleep and woke up from PULSE_PIN rising
         // check_gpio_time is set to true
@@ -1353,7 +1353,7 @@ static void gm_deep_sleep_init(void)
                     (now.tv_usec - last_report_sent_time.tv_usec) / 1000000;
 
     const uint64_t wakeup_time_sec = MUST_SYNC_MINIMUM_TIME - report_time_s;
-    ESP_LOGI(TAG, "Enabling timer wakeup, %llds", wakeup_time_sec);
+    ESP_LOGD(TAG, "Enabling timer wakeup, %llds", wakeup_time_sec);
     ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
 
     /* PULSE_PIN and MAIN_BTN wake up on pull up */
@@ -1382,24 +1382,24 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     uint32_t *p_sg_p = signal_struct->p_app_signal;
     esp_err_t err_status = signal_struct->esp_err_status;
     esp_zb_app_signal_type_t sig_type = *p_sg_p;
-    ESP_LOGI(TAG, "Shall handle signal 0x%x - %s", sig_type, esp_zb_zdo_signal_to_string(sig_type));
+    ESP_LOGD(TAG, "Shall handle signal 0x%x - %s", sig_type, esp_zb_zdo_signal_to_string(sig_type));
     switch (sig_type) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
-        ESP_LOGI(TAG, "Initialize Zigbee stack");
+        ESP_LOGD(TAG, "Initialize Zigbee stack");
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
         break;
     case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START:
     case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
         if (err_status == ESP_OK) {
-            ESP_LOGI(TAG, "Device started up in%s factory-reset mode", esp_zb_bdb_is_factory_new() ? "" : " non");
+            ESP_LOGD(TAG, "Device started up in%s factory-reset mode", esp_zb_bdb_is_factory_new() ? "" : " non");
             if (esp_zb_bdb_is_factory_new()) {
-                ESP_LOGI(TAG, "Start network steering");
+                ESP_LOGD(TAG, "Start network steering");
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             } else {
                 can_restart_sleep = true;
-                ESP_LOGI(TAG, "Device rebooted");
+                ESP_LOGD(TAG, "Device rebooted");
             }
-            ESP_LOGI(TAG, "Deferred driver initialization %s", gm_tasks_init() ? "failed" : "successful");
+            ESP_LOGD(TAG, "Deferred driver initialization %s", gm_tasks_init() ? "failed" : "successful");
         } else {
             ESP_LOGW(TAG, "%s failed with status: %s, retrying", esp_zb_zdo_signal_to_string(sig_type),
                      esp_err_to_name(err_status));
@@ -1410,12 +1410,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         if (err_status == ESP_OK) {
             esp_zb_ieee_addr_t extended_pan_id;
             esp_zb_get_extended_pan_id(extended_pan_id);
-            ESP_LOGI(TAG, "Joined network successfully (Extended PAN ID: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x, PAN ID: 0x%04hx, Channel:%d, Short Address: 0x%04hx)",
+            ESP_LOGD(TAG, "Joined network successfully (Extended PAN ID: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x, PAN ID: 0x%04hx, Channel:%d, Short Address: 0x%04hx)",
                      extended_pan_id[7], extended_pan_id[6], extended_pan_id[5], extended_pan_id[4],
                      extended_pan_id[3], extended_pan_id[2], extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
         } else {
-            ESP_LOGI(TAG, "Network steering was not successful (status: %s)", esp_err_to_name(err_status));
+            ESP_LOGD(TAG, "Network steering was not successful (status: %s)", esp_err_to_name(err_status));
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
         }
         break;
@@ -1430,10 +1430,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         esp_zb_set_node_descriptor_manufacturer_code(manufacturer_code);
         break;
     case ESP_ZB_COMMON_SIGNAL_CAN_SLEEP:
-        ESP_LOGI(TAG, "Can sleep");
+        ESP_LOGD(TAG, "Can sleep");
         break;
     default:
-        ESP_LOGI(TAG, "ZDO signal: %s (0x%x), status: %s", esp_zb_zdo_signal_to_string(sig_type), sig_type, esp_err_to_name(err_status));
+        ESP_LOGD(TAG, "ZDO signal: %s (0x%x), status: %s", esp_zb_zdo_signal_to_string(sig_type), sig_type, esp_err_to_name(err_status));
         break;
     }
 }
@@ -1571,7 +1571,8 @@ static esp_err_t esp_zb_power_save_init(void)
 void app_main(void) 
 {
     esp_log_level_set("*", ESP_LOG_ERROR);
-    ESP_LOGI(TAG, "\n");
+    esp_log_level_set(TAG, ESP_LOG_INFO);
+    ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
     gm_gpio_interrup_init();
