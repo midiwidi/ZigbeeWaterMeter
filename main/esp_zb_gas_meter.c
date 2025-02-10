@@ -31,7 +31,6 @@
 #ifdef CONFIG_PM_ENABLE
 #include "esp_pm.h"
 #include "esp_private/esp_clk.h"
-#include "esp_sleep.h"
 #endif
 
 /* Hardware configuration */
@@ -261,6 +260,8 @@ static RTC_DATA_ATTR struct timeval last_battery_measurement_time;
 // turned to true when a new measure has to be obtained
 static bool shall_measure_battery = false;
 
+static bool measuring_battery = false;
+
 // values to be sent to zigbee
 static RTC_DATA_ATTR uint8_t battery_voltage = 84;
 static RTC_DATA_ATTR uint8_t battery_percentage = 100*2;
@@ -366,19 +367,21 @@ void check_shall_enable_radio()
 // Computes if it is needed to measure battery voltage
 void check_shall_measure_battery()
 {
-    if (last_battery_measurement_time.tv_sec == 0 && last_battery_measurement_time.tv_usec == 0) {
-        shall_measure_battery = true;
-    } else {
-        struct timeval now;
-        gettimeofday(&now, NULL);
-        int time_diff_s = (now.tv_sec  - last_battery_measurement_time.tv_sec ) + (now.tv_usec - last_battery_measurement_time.tv_usec) / 1000000;
-        shall_measure_battery = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
-    }
-    if (shall_measure_battery) {
-        // battery voltage is measured with zigbee radio 
-        // turned on
-        shall_enable_radio = true;
-        current_summation_delivered_report = true;
+    if (!shall_measure_battery && !measuring_battery) {
+        if (last_battery_measurement_time.tv_sec == 0 && last_battery_measurement_time.tv_usec == 0) {
+            shall_measure_battery = true;
+        } else {
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            int time_diff_s = (now.tv_sec  - last_battery_measurement_time.tv_sec ) + (now.tv_usec - last_battery_measurement_time.tv_usec) / 1000000;
+            shall_measure_battery = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
+        }
+        if (shall_measure_battery) {
+            // battery voltage is measured with zigbee radio 
+            // turned on
+            shall_enable_radio = true;
+            current_summation_delivered_report = true;
+        }
     }
 }
 
@@ -1125,6 +1128,7 @@ void adc_task(void *arg)
             battery_report = true;
             ESP_LOGD(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
                 average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage);
+            gettimeofday(&last_battery_measurement_time, NULL);
         }
     } else if (ret == ESP_ERR_TIMEOUT) {
         ESP_LOGE(TAG, "ADC Task ESP_ERR_TIMEOUT");
@@ -1135,7 +1139,7 @@ void adc_task(void *arg)
     bat_adc_calibration_deinit(adc1_cali_chan0_handle);
     ESP_ERROR_CHECK(adc_continuous_stop(handle));
     ESP_ERROR_CHECK(adc_continuous_deinit(handle));
-
+    measuring_battery = false;
     vTaskDelete(NULL);
 }
 
@@ -1161,8 +1165,10 @@ static void gm_main_loop_task(void *arg)
             extended_status_report = true;
             shall_measure_battery = true;
         }
-        if (shall_measure_battery) {
+        check_shall_measure_battery();
+        if (shall_measure_battery && !measuring_battery) {
             shall_measure_battery = false;
+            measuring_battery = true;
             xTaskCreate(adc_task, "adc", 4096, NULL, tskIDLE_PRIORITY, &s_task_handle);
         }
         if (check_gpio_time) {
@@ -1297,6 +1303,11 @@ static void gm_deep_sleep_init(void)
 
     ESP_ERROR_CHECK(esp_timer_create(&longpress_timer_args, &longpress_timer));
 
+    const int gpio_wakeup_pin_1 = PULSE_PIN;
+    const uint64_t gpio_wakeup_pin_mask_1 = 1ULL << gpio_wakeup_pin_1;
+    const int gpio_wakeup_pin_2 = MAIN_BTN;
+    const uint64_t gpio_wakeup_pin_mask_2 = 1ULL << gpio_wakeup_pin_2;
+
     // wake-up reason:
     struct timeval now;
     gettimeofday(&now, NULL);
@@ -1313,8 +1324,8 @@ static void gm_deep_sleep_init(void)
         }
         case ESP_SLEEP_WAKEUP_EXT1: {
             bool resolved = false;
-            int level = gpio_get_level(MAIN_BTN);
-            if (level == 1) { // wakeup from MAIN_BTN
+            uint64_t ext1mask = esp_sleep_get_ext1_wakeup_status();
+            if ((ext1mask & gpio_wakeup_pin_mask_2) == gpio_wakeup_pin_mask_2) { // wakeup from MAIN_BTN
                 ESP_LOGI(TAG, "Wake up from MAIN BUTTON. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 start_long_press_detector = true;
                 started_from_deep_sleep = true;
@@ -1323,9 +1334,8 @@ static void gm_deep_sleep_init(void)
                 ignore_enter_sleep = true;
                 resolved = true;
             }
-            level = gpio_get_level(PULSE_PIN);
-            if (level == 1) { // wakeup from PULSE_PIN
-                ESP_LOGI(TAG, "Wake up from GAS DETECTOR. Time spent in deep sleep and boot: %dms", sleep_time_ms);
+            if ((ext1mask & gpio_wakeup_pin_mask_1) == gpio_wakeup_pin_mask_1) { // wakeup from PULSE_PIN
+                ESP_LOGI(TAG, "Wake up from GAS PULSE. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 gpio_time = esp_timer_get_time();
                 check_gpio_time = true;
                 ignore_enter_sleep = true;
@@ -1357,10 +1367,7 @@ static void gm_deep_sleep_init(void)
     ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
 
     /* PULSE_PIN and MAIN_BTN wake up on pull up */
-    const int gpio_wakeup_pin_1 = PULSE_PIN;
-    const uint64_t gpio_wakeup_pin_mask_1 = 1ULL << gpio_wakeup_pin_1;
-    const int gpio_wakeup_pin_2 = MAIN_BTN;
-    const uint64_t gpio_wakeup_pin_mask_2 = 1ULL << gpio_wakeup_pin_2;
+
     ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(
         gpio_wakeup_pin_mask_1 | gpio_wakeup_pin_mask_2, ESP_EXT1_WAKEUP_ANY_HIGH
     ));
