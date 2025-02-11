@@ -320,7 +320,7 @@ void gm_counter_save_nvs()
 }
 
 // Set counter value and save
-void gm_counter_set(esp_zb_uint48_t *new_value) 
+void gm_counter_set(const esp_zb_uint48_t *new_value) 
 {
     current_summation_delivered.low = new_value->low;
     current_summation_delivered.high = new_value->high;
@@ -987,7 +987,7 @@ static void gm_compute_instantaneous_demand(const struct timeval *now, const boo
     }
 }
 
-static esp_err_t bat_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+static esp_err_t bat_adc_calibration_init(const adc_unit_t unit, const adc_channel_t channel, const adc_atten_t atten, adc_cali_handle_t *out_handle)
 {
     adc_cali_handle_t handle = NULL;
     esp_err_t ret = ESP_FAIL;
@@ -1013,7 +1013,7 @@ static esp_err_t bat_adc_calibration_init(adc_unit_t unit, adc_channel_t channel
     return ret;
 }
 
-static esp_err_t bat_adc_calibration_deinit(adc_cali_handle_t handle)
+static esp_err_t bat_adc_calibration_deinit(const adc_cali_handle_t handle)
 {
     ESP_LOGD(TAG, "deregister %s calibration scheme", "Curve Fitting");
     ESP_RETURN_ON_ERROR(adc_cali_delete_scheme_curve_fitting(handle), TAG, "Failed to delete ADC calibration curve");
@@ -1029,7 +1029,7 @@ static bool IRAM_ATTR bat_conv_done_cb(adc_continuous_handle_t handle, const adc
     return (mustYield == pdTRUE);
 }
 
-static void bat_continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *out_handle)
+static void bat_continuous_adc_init(const adc_channel_t channel, adc_continuous_handle_t *out_handle)
 {
     adc_continuous_handle_t handle = NULL;
 
