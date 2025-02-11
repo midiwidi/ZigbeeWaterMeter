@@ -1330,10 +1330,10 @@ esp_err_t gm_deep_sleep_init()
 
     ESP_RETURN_ON_ERROR(esp_timer_create(&longpress_timer_args, &longpress_timer), TAG, "Can't create longpress_timer");
 
-    const int gpio_wakeup_pin_1 = PULSE_PIN;
-    const uint64_t gpio_wakeup_pin_mask_1 = 1ULL << gpio_wakeup_pin_1;
-    const int gpio_wakeup_pin_2 = MAIN_BTN;
-    const uint64_t gpio_wakeup_pin_mask_2 = 1ULL << gpio_wakeup_pin_2;
+    const int gpio_pulse_pin = PULSE_PIN;
+    const uint64_t gpio_pulse_pin_mask = 1ULL << gpio_pulse_pin;
+    const int gpio_mainbtn_pin = MAIN_BTN;
+    const uint64_t gpio_mainbtn_pin_mask = 1ULL << gpio_mainbtn_pin;
 
     // wake-up reason:
     gettimeofday(&gpio_time, NULL);
@@ -1351,7 +1351,7 @@ esp_err_t gm_deep_sleep_init()
         case ESP_SLEEP_WAKEUP_EXT1: {
             bool resolved = false;
             uint64_t ext1mask = esp_sleep_get_ext1_wakeup_status();
-            if ((ext1mask & gpio_wakeup_pin_mask_2) == gpio_wakeup_pin_mask_2) { // wakeup from MAIN_BTN
+            if ((ext1mask & gpio_mainbtn_pin_mask) == gpio_mainbtn_pin_mask) { // wakeup from MAIN_BTN
                 ESP_LOGI(TAG, "Wake up from MAIN BUTTON. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 start_long_press_detector = true;
                 started_from_deep_sleep = true;
@@ -1362,7 +1362,7 @@ esp_err_t gm_deep_sleep_init()
                 check_main_btn_interrupt_miss = true;
                 resolved = true;
             }
-            if ((ext1mask & gpio_wakeup_pin_mask_1) == gpio_wakeup_pin_mask_1) { // wakeup from PULSE_PIN
+            if ((ext1mask & gpio_pulse_pin_mask) == gpio_pulse_pin_mask) { // wakeup from PULSE_PIN
                 ESP_LOGI(TAG, "Wake up from GAS PULSE. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 check_gpio_time = true;
                 ignore_enter_sleep = true;
@@ -1396,7 +1396,7 @@ esp_err_t gm_deep_sleep_init()
     /* PULSE_PIN and MAIN_BTN wake up on pull up */
 
     ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup_io(
-        gpio_wakeup_pin_mask_1 | gpio_wakeup_pin_mask_2, ESP_EXT1_WAKEUP_ANY_HIGH
+        gpio_pulse_pin_mask | gpio_mainbtn_pin_mask, ESP_EXT1_WAKEUP_ANY_HIGH
     ));
 
     esp_deep_sleep_disable_rom_logging();
@@ -1546,16 +1546,26 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg)
 esp_err_t gm_gpio_interrup_init() 
 {
     uint64_t pulse_pin  = 1ULL << PULSE_PIN;
-    uint64_t wakeup_pin = 1ULL << MAIN_BTN;
                                         //      __
-    gpio_config_t io_conf = {           // ____|  |_____
+    gpio_config_t io_conf_pulse = {     // ____|  |_____
         .intr_type = GPIO_INTR_ANYEDGE, //     ^--^- Interrupt both edges
         .mode = GPIO_MODE_INPUT,        // Input pin
-        .pin_bit_mask = pulse_pin | wakeup_pin,
+        .pin_bit_mask = pulse_pin,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .pull_up_en = GPIO_PULLUP_DISABLE
     };
-    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf_pulse), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
+
+    uint64_t mainbtn_pin = 1ULL << MAIN_BTN;
+                                        //      __
+    gpio_config_t io_conf_mainbtn = {   // ____|  |_____
+        .intr_type = GPIO_INTR_ANYEDGE, //     ^--^- Interrupt both edges
+        .mode = GPIO_MODE_INPUT,        // Input pin
+        .pin_bit_mask = mainbtn_pin,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf_mainbtn), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
 
     // Configure and register interrupt service
     ESP_RETURN_ON_ERROR(gpio_install_isr_service(ESP_INTR_FLAG_LOWMED), TAG, "Can't install isr service");
