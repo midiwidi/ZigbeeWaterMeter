@@ -178,11 +178,13 @@ static RTC_DATA_ATTR uint64_t last_summation_sent = 0;
 static int64_t last_instant_demand_calculated_time = 0;
 
 // time the device woke up due to interrupt
-static int64_t gpio_time = 0;
+static struct timeval gpio_time;
 
 // set to true when the device woke up to check if
 // the interrupt was received during the following 4 seconds
 static bool check_gpio_time = false;
+
+static bool check_main_btn_interrupt_miss = false;
 
 // flag to reset deep sleep timer
 static bool restart_deep_sleep = true;
@@ -339,6 +341,19 @@ void gm_counter_reset()
     ESP_LOGI(TAG, "Counter reset");
 }
 
+// Helper function to return the time in milliseconds since now and the other timeval
+// received as a parameter
+int time_diff_ms(struct timeval *out_now, const struct timeval *other)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    int time_diff = (now.tv_sec  - other->tv_sec ) * 1000 + (now.tv_usec - other->tv_usec) / 1000;
+    if (out_now != NULL) {
+        *out_now = now;
+    }
+    return time_diff;
+}
+
 // Check conditions to enable radio.
 // There are 2 possible conditions: 
 // - time pass since last report
@@ -346,11 +361,10 @@ void gm_counter_reset()
 void check_shall_enable_radio() 
 {
     if (!shall_enable_radio && !shall_disable_radio && !zigbee_enabled) {
-        if (last_report_sent_time.tv_sec != 0 || last_report_sent_time.tv_usec != 0) {
-            struct timeval now;
-            gettimeofday(&now, NULL);
-            int time_diff_s = (now.tv_sec  - last_report_sent_time.tv_sec ) + (now.tv_usec - last_report_sent_time.tv_usec) / 1000000;
-            shall_enable_radio = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
+        if (last_report_sent_time.tv_sec == 0 && last_report_sent_time.tv_usec == 0) {
+            shall_enable_radio = true;
+        } else {
+            shall_enable_radio = time_diff_ms(NULL, &last_report_sent_time) / 1000 >= MUST_SYNC_MINIMUM_TIME;
         }
         if (!shall_enable_radio && last_summation_sent > 0) {
             uint64_t current_summation_64 = current_summation_delivered.high;
@@ -371,10 +385,7 @@ void check_shall_measure_battery()
         if (last_battery_measurement_time.tv_sec == 0 && last_battery_measurement_time.tv_usec == 0) {
             shall_measure_battery = true;
         } else {
-            struct timeval now;
-            gettimeofday(&now, NULL);
-            int time_diff_s = (now.tv_sec  - last_battery_measurement_time.tv_sec ) + (now.tv_usec - last_battery_measurement_time.tv_usec) / 1000000;
-            shall_measure_battery = time_diff_s >= MUST_SYNC_MINIMUM_TIME;
+            shall_measure_battery = time_diff_ms(NULL, &last_battery_measurement_time) / 1000 >= MUST_SYNC_MINIMUM_TIME;
         }
         if (shall_measure_battery) {
             // battery voltage is measured with zigbee radio 
@@ -393,6 +404,8 @@ void gm_counter_increment()
         current_summation_delivered.high += 1;
     }
     current_summation_delivered_sent = false;
+    current_summation_delivered_report = true;
+    save_counter_nvr = true;
 }
 
 // response to the ESP_ZB_CORE_REPORT_ATTR_CB_ID callback
@@ -861,19 +874,6 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , TAG, "Failed to start Zigbee bdb commissioning");
 }
 
-// callback to start deep sleep
-static void enter_deep_sleep_cb(void* arg)
-{
-    if (ignore_enter_sleep) {
-        ESP_LOGI(TAG, "Enter deep sleep ignored");
-    } else {
-        /* Enter deep sleep */
-        ESP_LOGI(TAG, "Enter deep sleep");
-        gettimeofday(&sleep_enter_time, NULL);
-        esp_deep_sleep_start();
-    }
-}
-
 // function called when the device leaves the zigee network
 void leave_callback(esp_zb_zdp_status_t zdo_status, void* args)
 {
@@ -906,20 +906,20 @@ static int dm_deep_sleep_time_ms() {
 }
 
 // start timer to sleep
-static void gm_deep_sleep_start(void)
+static void gm_deep_sleep_start()
 {
     ESP_ERROR_CHECK(esp_timer_start_once(deep_sleep_timer, dm_deep_sleep_time_ms() * 1000));
 }
 
 // restart timer to sleep to a new period
-static void gm_deep_sleep_restart(void)
+static void gm_deep_sleep_restart()
 {
     ESP_ERROR_CHECK(esp_timer_restart(deep_sleep_timer, dm_deep_sleep_time_ms() * 1000));
 }
 
 // entry point to restart (or start) the deep sleep timer
 // this entry point is save as it checks the time status first
-static void gm_deep_sleep_start_or_restart(void)
+static void gm_deep_sleep_start_or_restart()
 {
     if (esp_timer_is_active(deep_sleep_timer))
         gm_deep_sleep_restart();
@@ -928,7 +928,7 @@ static void gm_deep_sleep_start_or_restart(void)
 }
 
 // Stops the timer responsible of detecting MAIN BUTTON long press
-static void btn_longpress_stop(void) 
+static void btn_longpress_stop() 
 {
     if (esp_timer_is_active(longpress_timer)) {
         ESP_LOGD(TAG, "Stop long press timer");
@@ -937,29 +937,37 @@ static void btn_longpress_stop(void)
 }
 
 // Starts the timer responsible of detecting MAIN BUTTON long press
-static void btn_longpress_start(void) 
+static void btn_longpress_start() 
 {
-    int before_longpress_time_sec = LONG_PRESS_TIMEOUT * 1000;
+    int before_longpress_time_msec = LONG_PRESS_TIMEOUT * 1000;
     if (started_from_deep_sleep) {
-        before_longpress_time_sec -= 2800; // measured time for the device to start
+        before_longpress_time_msec -= 150; // measured time for the device to start
     }
-    ESP_LOGD(TAG, "Start long press timer for %dms", before_longpress_time_sec);
+    ESP_LOGD(TAG, "Start long press timer for %dms", before_longpress_time_msec);
     btn_longpress_stop();
-    ESP_ERROR_CHECK(esp_timer_start_once(longpress_timer, before_longpress_time_sec * 1000));
+    ESP_ERROR_CHECK(esp_timer_start_once(longpress_timer, before_longpress_time_msec * 1000));
 }
 
 // After two consecutive values of current_summation_delivered this method
 // computes the instantaneous_demand
 // NOTE: there is one special task to set instantaneous demand to 0 when no
 // values arrive
-static void gm_compute_instantaneous_demand(struct timeval *now, bool save_time)
+static void gm_compute_instantaneous_demand(const struct timeval *now, const bool save_time)
 {
     if (last_pulse_time.tv_sec != 0 || last_pulse_time.tv_usec != 0) {
         int time_diff_ms = (now->tv_sec  - last_pulse_time.tv_sec ) * 1000 + 
                         (now->tv_usec - last_pulse_time.tv_usec) / 1000;
         if (time_diff_ms > 0) {
             float time_diff_h = time_diff_ms / (1000.0 * 3600.0); // Convert time to hours/100
-            int32_t _instantaneous_demand = (int32_t)((1 / time_diff_h) + 0.5); // compute flow in m³/h
+            int32_t _instantaneous_demand;
+            if (time_diff_h > 0) 
+            {
+                _instantaneous_demand = (int32_t)((1 / time_diff_h) + 0.5); // compute flow in m³/h
+            } 
+            else
+            {
+                _instantaneous_demand = 0;
+            }
             // check for a real change in the value
             esp_zb_int24_t new_instantaneous_demand;
             new_instantaneous_demand.low = _instantaneous_demand & 0x0000FFFF;
@@ -977,44 +985,6 @@ static void gm_compute_instantaneous_demand(struct timeval *now, bool save_time)
         last_pulse_time.tv_usec = now->tv_usec;
         last_pulse_time.tv_sec = now->tv_sec;
     }
-}
-
-// update instantaneous demand to 0 when no pulses are received in a minute
-static void gm_update_instantaneous_demand_task() 
-{
-    int64_t current_time = esp_timer_get_time();
-    if (last_instant_demand_calculated_time == 0) {
-        last_instant_demand_calculated_time = current_time;
-        return;
-    }
-    int64_t time_diff_ms = (current_time - last_instant_demand_calculated_time) / 1000;
-    if (time_diff_ms > (TIME_TO_SLEEP_ZIGBEE_ON - 2)*1000) {
-        // this is sending values to decrease the instantaneous demand curve, but takes
-        // too long to reach 0 so the device never enters deep sleep.
-        // Either, remove instant_demand attribute from cluster because it
-        // makes no sense when on batteries or power the device from external
-        // source and uncomment this (but comment the code that sets this value to 0)
-        //
-        // struct timeval now;
-        // gettimeofday(&now, NULL);
-        // gm_compute_instantaneous_demand(&now, false);
-        if (instantaneous_demand.low != 0 || instantaneous_demand.high != 0) {
-            instantaneous_demand.low = 0;
-            instantaneous_demand.high = 0;
-            instantaneous_demand_report = true;
-
-            last_instant_demand_calculated_time = current_time;
-        }
-    }
-}
-
-static bool IRAM_ATTR bat_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
-{
-    BaseType_t mustYield = pdFALSE;
-    //Notify that ADC continuous driver has done enough number of conversions
-    vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
-
-    return (mustYield == pdTRUE);
 }
 
 static esp_err_t bat_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
@@ -1043,10 +1013,20 @@ static esp_err_t bat_adc_calibration_init(adc_unit_t unit, adc_channel_t channel
     return ret;
 }
 
-static void bat_adc_calibration_deinit(adc_cali_handle_t handle)
+static esp_err_t bat_adc_calibration_deinit(adc_cali_handle_t handle)
 {
     ESP_LOGD(TAG, "deregister %s calibration scheme", "Curve Fitting");
-    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+    ESP_RETURN_ON_ERROR(adc_cali_delete_scheme_curve_fitting(handle), TAG, "Failed to delete ADC calibration curve");
+    return ESP_OK;
+}
+
+static bool IRAM_ATTR bat_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
+{
+    BaseType_t mustYield = pdFALSE;
+    //Notify that ADC continuous driver has done enough number of conversions
+    vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
+
+    return (mustYield == pdTRUE);
 }
 
 static void bat_continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *out_handle)
@@ -1136,11 +1116,37 @@ void adc_task(void *arg)
         // TODO: indicate in status that battery can't be read
     }
 
-    bat_adc_calibration_deinit(adc1_cali_chan0_handle);
+    ESP_ERROR_CHECK(bat_adc_calibration_deinit(adc1_cali_chan0_handle));
     ESP_ERROR_CHECK(adc_continuous_stop(handle));
     ESP_ERROR_CHECK(adc_continuous_deinit(handle));
     measuring_battery = false;
     vTaskDelete(NULL);
+}
+
+// update instantaneous demand to 0 when no pulses are received in a minute
+static void gm_reset_instantaneous_demand_task() 
+{
+    int64_t current_time = esp_timer_get_time();
+    if (last_instant_demand_calculated_time == 0) {
+        last_instant_demand_calculated_time = current_time;
+        return;
+    }
+    int64_t time_diff_ms = (current_time - last_instant_demand_calculated_time) / 1000;
+    if (time_diff_ms > (TIME_TO_SLEEP_ZIGBEE_ON - 2)*1000) {
+        // I tried sending values to decrease the instantaneous demand curve, but takes
+        // too long to reach 0 so the device never enters deep sleep.
+        // At a certain moment I'll have to made a decision
+        // either, remove instant_demand attribute from cluster because it
+        // makes no sense when on batteries or power the device from external
+        // source and add a call here to update instantaneous demand
+        if (instantaneous_demand.low != 0 || instantaneous_demand.high != 0) {
+            instantaneous_demand.low = 0;
+            instantaneous_demand.high = 0;
+            instantaneous_demand_report = true;
+
+            last_instant_demand_calculated_time = current_time;
+        }
+    }
 }
 
 // device main loop activities, note
@@ -1151,10 +1157,11 @@ static void gm_main_loop_task(void *arg)
 {
     ESP_LOGD(TAG, "Main Loop Task...");
     while (true) {
-        gm_update_instantaneous_demand_task();
-        if (deferred_main_btn_required_report) {
+        gm_reset_instantaneous_demand_task();
+        if (deferred_main_btn_required_report && can_restart_sleep) {
             ESP_LOGD(TAG, "deferred_main_btn_required_report");
             deferred_main_btn_required_report = false;
+
             shall_enable_radio = true;
             restart_deep_sleep = true;
             start_long_press_detector = true;
@@ -1171,6 +1178,14 @@ static void gm_main_loop_task(void *arg)
             measuring_battery = true;
             xTaskCreate(adc_task, "adc", 4096, NULL, tskIDLE_PRIORITY, &s_task_handle);
         }
+        if (check_main_btn_interrupt_miss) {
+            ESP_LOGD(TAG, "check_main_btn_interrupt_miss");
+            check_main_btn_interrupt_miss = false;
+            int level = gpio_get_level(PULSE_PIN);
+            if (level == 0) {
+                stop_long_press_detector = true;
+            }
+        }
         if (check_gpio_time) {
             ESP_LOGD(TAG, "check_gpio_time");
             check_gpio_time = false;
@@ -1179,10 +1194,7 @@ static void gm_main_loop_task(void *arg)
             // miss the interrupt so count it now
             if (level == 0) {
                 gm_counter_increment();
-                save_counter_nvr = true;
-                // last_pulse_time = gpio_time; // saved when interrupted (TODO: shall increment time during the estimated pulse high duration)
-                current_summation_delivered_report = true;
-                instantaneous_demand_report = true;
+                gm_compute_instantaneous_demand(&gpio_time, true);
                 ignore_enter_sleep = false;
                 restart_deep_sleep = true;
             }
@@ -1288,22 +1300,35 @@ static void gm_main_loop_zigbee_task(void *arg)
     }
 }
 
+// callback to start deep sleep
+static void enter_deep_sleep_cb(void* arg)
+{
+    if (ignore_enter_sleep) {
+        ESP_LOGI(TAG, "Enter deep sleep ignored");
+    } else {
+        /* Enter deep sleep */
+        ESP_LOGI(TAG, "Enter deep sleep");
+        gettimeofday(&sleep_enter_time, NULL);
+        esp_deep_sleep_start();
+    }
+}
+
 // configure deep sleep for the gas meter
-static void gm_deep_sleep_init(void)
+esp_err_t gm_deep_sleep_init()
 {
     const esp_timer_create_args_t enter_deep_sleep_timer_args = {
             .callback = &enter_deep_sleep_cb,
             .name = "enter-deep-sleep"
     };
 
-    ESP_ERROR_CHECK(esp_timer_create(&enter_deep_sleep_timer_args, &deep_sleep_timer));
+    ESP_RETURN_ON_ERROR(esp_timer_create(&enter_deep_sleep_timer_args, &deep_sleep_timer), TAG, "Can't create deep_sleep_timer");
 
     const esp_timer_create_args_t longpress_timer_args = {
             .callback = &longpress_cb,
             .name = "long-press"
     };
 
-    ESP_ERROR_CHECK(esp_timer_create(&longpress_timer_args, &longpress_timer));
+    ESP_RETURN_ON_ERROR(esp_timer_create(&longpress_timer_args, &longpress_timer), TAG, "Can't create longpress_timer");
 
     const int gpio_wakeup_pin_1 = PULSE_PIN;
     const uint64_t gpio_wakeup_pin_mask_1 = 1ULL << gpio_wakeup_pin_1;
@@ -1311,10 +1336,9 @@ static void gm_deep_sleep_init(void)
     const uint64_t gpio_wakeup_pin_mask_2 = 1ULL << gpio_wakeup_pin_2;
 
     // wake-up reason:
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    int sleep_time_ms = (now.tv_sec  - sleep_enter_time.tv_sec ) * 1000 + 
-                        (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+    gettimeofday(&gpio_time, NULL);
+    int sleep_time_ms = (gpio_time.tv_sec  - sleep_enter_time.tv_sec ) * 1000 + 
+                        (gpio_time.tv_usec - sleep_enter_time.tv_usec) / 1000;
     esp_sleep_wakeup_cause_t wake_up_cause = esp_sleep_get_wakeup_cause();
     switch (wake_up_cause) {
         case ESP_SLEEP_WAKEUP_TIMER: {
@@ -1331,14 +1355,15 @@ static void gm_deep_sleep_init(void)
                 ESP_LOGI(TAG, "Wake up from MAIN BUTTON. Time spent in deep sleep and boot: %dms", sleep_time_ms);
                 start_long_press_detector = true;
                 started_from_deep_sleep = true;
+                shall_measure_battery = true;
                 shall_enable_radio = true;
                 current_summation_delivered_report = true;
                 ignore_enter_sleep = true;
+                check_main_btn_interrupt_miss = true;
                 resolved = true;
             }
             if ((ext1mask & gpio_wakeup_pin_mask_1) == gpio_wakeup_pin_mask_1) { // wakeup from PULSE_PIN
                 ESP_LOGI(TAG, "Wake up from GAS PULSE. Time spent in deep sleep and boot: %dms", sleep_time_ms);
-                gpio_time = esp_timer_get_time();
                 check_gpio_time = true;
                 ignore_enter_sleep = true;
                 resolved = true;
@@ -1361,8 +1386,8 @@ static void gm_deep_sleep_init(void)
 
     /* Set the methods of how to wake up: */
     /* 1. RTC timer waking-up */
-    int report_time_s = (now.tv_sec  - last_report_sent_time.tv_sec ) + 
-                    (now.tv_usec - last_report_sent_time.tv_usec) / 1000000;
+    int report_time_s = (gpio_time.tv_sec  - last_report_sent_time.tv_sec ) + 
+                    (gpio_time.tv_usec - last_report_sent_time.tv_usec) / 1000000;
 
     const uint64_t wakeup_time_sec = MUST_SYNC_MINIMUM_TIME - report_time_s;
     ESP_LOGD(TAG, "Enabling timer wakeup, %llds", wakeup_time_sec);
@@ -1370,11 +1395,13 @@ static void gm_deep_sleep_init(void)
 
     /* PULSE_PIN and MAIN_BTN wake up on pull up */
 
-    ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(
+    ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup_io(
         gpio_wakeup_pin_mask_1 | gpio_wakeup_pin_mask_2, ESP_EXT1_WAKEUP_ANY_HIGH
     ));
 
     esp_deep_sleep_disable_rom_logging();
+
+    return ESP_OK;
 }
 
 // tasks definitions to satisfy reporting requirements
@@ -1450,11 +1477,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 // PULSE_PIN - GPIO Interruption handler
 void IRAM_ATTR gpio_pulse_isr_handler(void* arg) 
 {
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    int time_diff_ms = (now.tv_sec  - last_pulse_time.tv_sec ) * 1000 + 
-                        (now.tv_usec - last_pulse_time.tv_usec) / 1000;
-    if ((last_pulse_time.tv_sec != 0 || last_pulse_time.tv_usec != 0) && time_diff_ms <= DEBOUNCE_TIMEOUT) {
+    static struct timeval now;
+    if ((last_pulse_time.tv_sec != 0 || last_pulse_time.tv_usec != 0) && time_diff_ms(&now, &last_pulse_time) <= DEBOUNCE_TIMEOUT) {
         magnet_debounced = true;
         return; // DEBOUNCE
     }
@@ -1468,8 +1492,6 @@ void IRAM_ATTR gpio_pulse_isr_handler(void* arg)
         gm_counter_increment();
         gm_compute_instantaneous_demand(&now, true);
 
-        current_summation_delivered_report = true;
-        save_counter_nvr = true;
         ignore_enter_sleep = false;
         check_gpio_time = false; // avoid double count
     } else {
@@ -1510,6 +1532,7 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg)
     if (level == 0) {
         // detect long and short time press
         stop_long_press_detector = true;
+        check_main_btn_interrupt_miss = false;
     }
 
     last_main_btn_time = current_time;
@@ -1520,7 +1543,7 @@ void IRAM_ATTR gpio_btn_isr_handler(void *arg)
 // resistors aren't used so they are disabled.
 // In order to save battery I decided to use pull-down because this is
 // how the sensor should stay most of the time
-void gm_gpio_interrup_init() 
+esp_err_t gm_gpio_interrup_init() 
 {
     uint64_t pulse_pin  = 1ULL << PULSE_PIN;
     uint64_t wakeup_pin = 1ULL << MAIN_BTN;
@@ -1532,12 +1555,12 @@ void gm_gpio_interrup_init()
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .pull_up_en = GPIO_PULLUP_DISABLE
     };
-    gpio_config(&io_conf);
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
 
     // Configure and register interrupt service
-    gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
-    gpio_isr_handler_add(PULSE_PIN, gpio_pulse_isr_handler, NULL);
-    gpio_isr_handler_add(MAIN_BTN, gpio_btn_isr_handler, NULL);
+    ESP_RETURN_ON_ERROR(gpio_install_isr_service(ESP_INTR_FLAG_LOWMED), TAG, "Can't install isr service");
+    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(PULSE_PIN, gpio_pulse_isr_handler, NULL), TAG, "Can't add PULSE_PIN interrupt handler");
+    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(MAIN_BTN, gpio_btn_isr_handler, NULL), TAG, "Can't add MAIN_BTN interrupt handler");
 
     // Enable voltage measure enable output pin
     uint64_t bat_volt_enable_pin = 1ULL << BAT_MON_ENABLE;
@@ -1548,11 +1571,13 @@ void gm_gpio_interrup_init()
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .pull_up_en = GPIO_PULLUP_DISABLE
     };
-    gpio_config(&voltage_enable_conf);
+    ESP_RETURN_ON_ERROR(gpio_config(&voltage_enable_conf), TAG, "Can't config gpio for BAT_MON_ENABLE pin");
+
+    return ESP_OK;
 }
 
 // configure power save
-static esp_err_t esp_zb_power_save_init(void)
+esp_err_t esp_zb_power_save_init(void)
 {
     esp_err_t rc = ESP_OK;
 #ifdef CONFIG_PM_ENABLE
@@ -1564,7 +1589,7 @@ static esp_err_t esp_zb_power_save_init(void)
         // TODO: explore why this causes a problem 
         // When the device enters deep sleep after a 3s period
         // caused by the counter going up one tick
-        // the device wakes up on RTC utomatically and this
+        // the device wakes up on RTC automatically and this
         // is not desired as it will turn on Zigbee radio
         // as it is defined in code
 
@@ -1584,11 +1609,11 @@ void app_main(void)
     ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
-    gm_gpio_interrup_init();
+    ESP_ERROR_CHECK(gm_gpio_interrup_init());
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_zb_power_save_init());
     ESP_ERROR_CHECK(gm_counter_load_nvs());
-    gm_deep_sleep_init();
+    ESP_ERROR_CHECK(gm_deep_sleep_init());
 
     // start main loop
     ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);
