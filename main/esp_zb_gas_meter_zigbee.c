@@ -11,6 +11,7 @@
  */
 #include "esp_log.h"
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
 #include "hal/ieee802154_ll.h"
 
 #include "esp_zb_gas_meter.h"
@@ -32,23 +33,15 @@ esp_zb_uint48_t current_summation_delivered = {
 	.low = 0,
 	.high = 0
 };
-bool current_summation_delivered_sent = false;
 uint8_t device_status = 0x0;
 uint64_t device_extended_status = 0x0;
-bool current_summation_delivered_report = false;
-bool status_report = false;
-bool extended_status_report = false;
 esp_zb_int24_t instantaneous_demand = {
     .low = 0,
     .high = 0
 };
-bool instantaneous_demand_report = false;
+
 struct timeval last_report_sent_time = {0};
 uint64_t last_summation_sent = 0;
-bool ignore_enter_sleep = false;
-bool restart_deep_sleep = true;
-bool joined_network = false;
-
 
 // value for the ESP_ZB_ZCL_ATTR_IDENTIFY_IDENTIFY_TIME_ID attribute
 uint16_t identify_time = 0;
@@ -89,10 +82,15 @@ esp_err_t zb_attribute_reporting_handler(const esp_zb_zcl_report_attr_message_t 
 {
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
     ESP_RETURN_ON_FALSE(message->status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
-                        message->status);
-    ESP_LOGD(TAG, "Report received from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
-             message->src_address.u.short_addr, message->src_endpoint,
-             message->dst_endpoint, message->cluster);
+        message->status);
+    ESP_LOGI(TAG, "Report received from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) attribute(0x%x) type(0x%x)",
+        message->src_address.u.short_addr, 
+        message->src_endpoint,
+        message->dst_endpoint, 
+        message->cluster,
+        message->attribute.id,
+        message->attribute.data.type
+    );
     return ESP_OK;
 }
 
@@ -103,20 +101,44 @@ esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGD(TAG, "Read attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
-             message->info.src_address.u.short_addr, message->info.src_endpoint,
-             message->info.dst_endpoint, message->info.cluster);
+    ESP_LOGI(TAG, "Read attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(0x%x)",
+             message->info.src_address.u.short_addr, 
+             message->info.src_endpoint,
+             message->info.dst_endpoint, 
+             message->info.cluster,
+             message->info.header.tsn
+    );
 
     esp_zb_zcl_read_attr_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGD(TAG, "Read attribute response: status(%d), cluster(0x%x), attribute(0x%x), type(0x%x), value(%d)",
-                    variable->status, message->info.cluster,
-                    variable->attribute.id, variable->attribute.data.type,
-                    variable->attribute.data.value ? *(uint8_t *)variable->attribute.data.value : 0);
+        ESP_LOGI(TAG, "Read attribute response variable: status(%d), cluster(0x%x), attribute(0x%x), type(0x%x), value(%d)",
+            variable->status, 
+            message->info.cluster,
+            variable->attribute.id, 
+            variable->attribute.data.type,
+            variable->attribute.data.value ? *(uint8_t *)variable->attribute.data.value : 0
+        );
         variable = variable->next;
     }
 
     return ESP_OK;
+}
+
+void zb_log_esp_zb_zcl_cmd_info_t(const char* prefix, const esp_zb_zcl_cmd_info_t *info)
+{
+    ESP_LOGI(TAG, "%s: from address(0x%x) src endpoint(%d) to dst address (0x%x) endpoint(%d) cluster(0x%x) profile(0x%x) transaction(0x%x) cmd id(0x%x) direction(0x%x) is_common(0x%x)",
+        prefix,
+        info->src_address.u.short_addr, 
+        info->src_endpoint,
+        info->dst_address, 
+        info->dst_endpoint, 
+        info->cluster,
+        info->profile,
+        info->header.tsn,
+        info->command.id,
+        info->command.direction,
+        info->command.is_common
+    );
 }
 
 // response to the ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID callback: TODO check if needed
@@ -126,13 +148,17 @@ esp_err_t zb_write_attr_resp_handler(const esp_zb_zcl_cmd_write_attr_resp_messag
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGD(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x)",
-             message->info.src_address.u.short_addr, message->info.src_endpoint,
-             message->info.dst_endpoint, message->info.cluster);
+    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(0x%x)",
+        message->info.src_address.u.short_addr, 
+        message->info.src_endpoint,
+        message->info.dst_endpoint, 
+        message->info.cluster,
+        message->info.header.tsn
+    );
 
     esp_zb_zcl_write_attr_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGD(TAG, "Write attribute response: status(%d), attribute(0x%x)",
+        ESP_LOGI(TAG, "Write attribute response: status(%d), attribute(0x%x)",
                     variable->status,
                     variable->attribute_id);
         variable = variable->next;
@@ -148,21 +174,40 @@ esp_err_t zb_configure_report_resp_handler(const esp_zb_zcl_cmd_config_report_re
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
+    zb_log_esp_zb_zcl_cmd_info_t("Configure report response", &message->info);
+
     esp_zb_zcl_config_report_resp_variable_t *variable = message->variables;
     while (variable) {
-        ESP_LOGD(TAG, "Configure report response: status(%d), cluster(0x%x), direction(0x%x), attribute(0x%x)",
-                 variable->status, message->info.cluster, variable->direction, variable->attribute_id);
+        ESP_LOGI(TAG, "Configure report response: status(%d), cluster(0x%x), direction(0x%x), attribute(0x%x)",
+            variable->status, 
+            message->info.cluster, 
+            variable->direction, 
+            variable->attribute_id
+        );
         variable = variable->next;
     }
 
     return ESP_OK;
 }
 
+esp_err_t zb_cmd_default_resp_handler(const esp_zb_zcl_cmd_default_resp_message_t *message)
+{
+    ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
+    ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
+                        message->info.status);
+
+    zb_log_esp_zb_zcl_cmd_info_t("Command default response", &message->info);
+
+    ESP_LOGI(TAG, "Default Response: Status: 0x%04x, To Command: 0x%x", message->status_code, message->resp_to_cmd);
+
+    return ESP_OK;
+}
+
 // transfer values from variables to zigbee radio
-esp_zb_zcl_status_t zb_radio_setup_report_values() 
+esp_zb_zcl_status_t zb_radio_setup_report_values(EventBits_t uxBits)
 {
     esp_zb_zcl_status_t status = ESP_ZB_ZCL_STATUS_SUCCESS;
-    if (current_summation_delivered_report) {
+    if ((uxBits & CURRENT_SUMMATION_DELIVERED_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID, &current_summation_delivered, false);
@@ -171,7 +216,7 @@ esp_zb_zcl_status_t zb_radio_setup_report_values()
             return status;
         }
     }
-    if (instantaneous_demand_report) {
+    if ((uxBits & INSTANTANEOUS_DEMAND_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID, &instantaneous_demand, false);
@@ -180,23 +225,21 @@ esp_zb_zcl_status_t zb_radio_setup_report_values()
             return status;
         }
     }
-    if (battery_report) {
+    if ((uxBits & BATTER_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID, &battery_percentage, false);
-        battery_percentage -= 2; // for testing purposes let's reduce battery_percentage 1% each time it is reported
         if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
             ESP_LOGE(TAG, "Updating value of battery percentage: %d", status);
         }
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID, &battery_voltage, false);
-        battery_voltage -= 1; // for testing purposes let's reduce battery_percentage 1% each time it is reported
         if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
             ESP_LOGE(TAG, "Updating value of battery voltage: %d", status);
         }
     }
-    if (status_report) {
+    if ((uxBits & STATUS_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_METERING_STATUS_ID, &device_status, false);
@@ -204,7 +247,7 @@ esp_zb_zcl_status_t zb_radio_setup_report_values()
             ESP_LOGE(TAG, "Updating value of status: %d", status);
         }
     }
-    if (extended_status_report) {
+    if ((uxBits & EXTENDED_STATUS_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
             ESP_ZB_ZCL_CLUSTER_ID_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID, &device_extended_status, false);
@@ -216,7 +259,7 @@ esp_zb_zcl_status_t zb_radio_setup_report_values()
 }
 
 // report attributes to radio
-void zb_radio_send_values() 
+void zb_radio_send_values(EventBits_t uxBits)
 {
     esp_zb_zcl_report_attr_cmd_t report_attr_cmd = {0};
     report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
@@ -224,30 +267,30 @@ void zb_radio_send_values()
     report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
     report_attr_cmd.zcl_basic_cmd.src_endpoint = MY_METERING_ENDPOINT;
 
-    if (current_summation_delivered_report) {
+    if ((uxBits & CURRENT_SUMMATION_DELIVERED_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
 
-    if (instantaneous_demand_report) {
+    if ((uxBits & INSTANTANEOUS_DEMAND_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
 
-    if (battery_report) {
+    if ((uxBits & BATTER_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
 
-    if (status_report) {
+    if ((uxBits & STATUS_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
     }
 
-    if (extended_status_report) {
+    if ((uxBits & EXTENDED_STATUS_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
@@ -257,7 +300,7 @@ void zb_radio_send_values()
 // Attribute handler
 esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message) 
 {
-    ESP_LOGD(TAG, "In zb_action_handler callback_id=0x%x", callback_id);
+    ESP_LOGI(TAG, "In zb_action_handler callback_id=0x%x", callback_id);
     esp_err_t ret = ESP_OK;
     switch (callback_id) {
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
@@ -281,15 +324,7 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
             }
         break;
     case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
-        esp_zb_zcl_cmd_default_resp_message_t *msg = (esp_zb_zcl_cmd_default_resp_message_t*)message;
-        ESP_LOGD(TAG, "Default Response: Status: 0x%04x, Command: %d", msg->status_code, msg->resp_to_cmd);
-        ESP_LOGD(TAG, "   Src addr: 0x%04x, Dst Addr: 0x%04x, src ep: %d, dst ep: %d, cluster: 0x%04x, profile: 0x%04x",
-                    msg->info.src_address.u.short_addr, msg->info.dst_address, msg->info.src_endpoint, msg->info.dst_endpoint,
-                    msg->info.cluster, msg->info.profile);
-        ESP_LOGD(TAG, "   Resp status: 0x%04x, frame control: 0x%02x, mfg code: 0x%04x, txn: %d, RSSI: %d",
-                    msg->info.status, msg->info.header.fc, msg->info.header.manuf_code, msg->info.header.tsn, msg->info.header.rssi);
-        current_summation_delivered_sent = true;
-        ret = ESP_OK;
+        ret = zb_cmd_default_resp_handler((esp_zb_zcl_cmd_default_resp_message_t*)message);
         break;
     default:
         ESP_LOGW(TAG, "Receive Zigbee action(0x%x) callback", callback_id);
@@ -380,7 +415,10 @@ void esp_zb_task(void *pvParameters)
                                         ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
                                         &battery_percentage));
 
-    /* metering cluster */
+    // ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+    //                                     ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+    //                                     &battery_alarm_state));
+        /* metering cluster */
 
     // This code can't be used because current_summation_delivered reporting can't be configured
     // esp_zb_metering_cluster_cfg_t metering_cfg = {
@@ -502,7 +540,7 @@ void esp_zb_task(void *pvParameters)
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(current_summation_delivered_location_info));
     esp_zb_zcl_reporting_info_t *current_summation_reporting_info = esp_zb_zcl_find_reporting_info(current_summation_delivered_location_info);
     current_summation_reporting_info->u.send_info.max_interval = (uint16_t)MUST_SYNC_MINIMUM_TIME;
-    current_summation_reporting_info->u.send_info.min_interval = TIME_TO_SLEEP_ZIGBEE_ON / 2;
+    current_summation_reporting_info->u.send_info.min_interval = TIME_TO_SLEEP_ZIGBEE_ON / 2000;
     esp_zb_uint48_t current_summation_reporting_delta = {
         .low = COUNTER_REPORT_DIFF,
         .high = 0
@@ -528,6 +566,15 @@ void esp_zb_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(percentage_location_info));
 
+    // esp_zb_zcl_attr_location_info_t  battery_alarm_state_location_info = {
+    //     .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+    //     .endpoint_id = MY_METERING_ENDPOINT,
+    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
+    // };
+    // ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(battery_alarm_state_location_info));
+
     esp_zb_zcl_attr_location_info_t status_location_info = {
         .attr_id = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID,
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_METERING,
@@ -547,8 +594,8 @@ void esp_zb_task(void *pvParameters)
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(extended_status_location_info));
 
     esp_zb_set_tx_power(IEEE802154_TXPOWER_VALUE_MIN);
-    esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
-    esp_zb_set_secondary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
+    ESP_ERROR_CHECK(esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK));
+    ESP_ERROR_CHECK(esp_zb_set_secondary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK));
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_stack_main_loop();
@@ -565,40 +612,42 @@ void gm_main_loop_zigbee_task(void *arg)
 {
     ESP_LOGI(TAG, "Zigbee Loop Task...");
     while (true) {
-        // if device was in deep sleep and woke up from PULSE_PIN rising
-        // check_gpio_time is set to true
-        // note, if PULSE_PIN goes down due to interrupt failing, then
-        // it is reset to false during interrupt handling
-        if (current_summation_delivered_report || instantaneous_demand_report || battery_report || status_report || extended_status_report) {
+        // Not all bits will be set, but it is more efficient to wait for the maximum
+        // number of bits to be set before continuing, this is the reason we wait for
+        // all bits to be set.
+        EventBits_t uxBits = xEventGroupWaitBits(
+            report_event_group_handle, 
+            CURRENT_SUMMATION_DELIVERED_REPORT | INSTANTANEOUS_DEMAND_REPORT | STATUS_REPORT | EXTENDED_STATUS_REPORT | BATTER_REPORT,
+            pdTRUE,
+            pdTRUE,
+            pdMS_TO_TICKS(250)
+        );
+        if (uxBits != 0) {
+            // Note we must manually clear the bits to avoid infinite loop
+            xEventGroupClearBits(report_event_group_handle, uxBits);
             ESP_LOGI(TAG, "Reporting to client Sum=%s, Instant=%s, Bat=%s, Status=%s, Exten=%s", 
-                current_summation_delivered_report ? "Yes": "No",
-                instantaneous_demand_report ? "Yes": "No",
-                battery_report ? "Yes": "No",
-                status_report ? "Yes": "No",
-                extended_status_report ? "Yes": "No"
+                ((uxBits & CURRENT_SUMMATION_DELIVERED_REPORT) != 0) ? "Yes": "No",
+                ((uxBits & INSTANTANEOUS_DEMAND_REPORT) != 0) ? "Yes": "No",
+                ((uxBits & BATTER_REPORT) != 0) ? "Yes": "No",
+                ((uxBits & STATUS_REPORT) != 0) ? "Yes": "No",
+                ((uxBits & EXTENDED_STATUS_REPORT) != 0) ? "Yes": "No"
             );
-            if (esp_zb_lock_acquire(portMAX_DELAY)) {
-                esp_zb_zcl_status_t status = zb_radio_setup_report_values();
+            if (esp_zb_lock_acquire(portMAX_DELAY)) 
+            {
+                esp_zb_zcl_status_t status = zb_radio_setup_report_values(uxBits);
                 if (status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-                    zb_radio_send_values();
+                    zb_radio_send_values(uxBits);
                 }
                 esp_zb_lock_release();
                 gettimeofday(&last_report_sent_time, NULL);
                 last_summation_sent = current_summation_delivered.high;
                 last_summation_sent <<= 32;
                 last_summation_sent |= current_summation_delivered.low;
-
             }
-            current_summation_delivered_report = false;
-            instantaneous_demand_report = false;
-            battery_report = false;
-            status_report = false;
-            extended_status_report = false;
-
-            ignore_enter_sleep = false;
-            restart_deep_sleep = true;
+            TickType_t deep_sleep_time = dm_deep_sleep_time_ms();
+            if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
+                ESP_LOGE(TAG, "Can't reschedule deep sleep timer");    
         }
-        vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
 
@@ -630,7 +679,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 ESP_LOGI(TAG, "Start network steering");
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             } else {
-                joined_network = true;
                 ESP_LOGI(TAG, "Device rebooted");
             }
             ESP_LOGD(TAG, "Deferred driver initialization %s", gm_tasks_init() ? "failed" : "successful");
@@ -671,5 +719,3 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         break;
     }
 }
-
-

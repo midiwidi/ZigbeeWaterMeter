@@ -25,7 +25,6 @@
 uint8_t battery_voltage = 0;
 uint8_t battery_percentage = 0;
 
-bool measuring_battery = false;
 struct timeval last_battery_measurement_time;
 
 adc_channel_t channel = ADC_CHANNEL_3; // GPIO 3
@@ -68,7 +67,7 @@ bool IRAM_ATTR bat_conv_done_cb(adc_continuous_handle_t handle, const adc_contin
 {
     BaseType_t mustYield = pdFALSE;
     //Notify that ADC continuous driver has done enough number of conversions
-    vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
+    vTaskNotifyGiveFromISR(adc_task_handle, &mustYield);
 
     return (mustYield == pdTRUE);
 }
@@ -119,14 +118,6 @@ void adc_task(void *arg)
     uint8_t result[BAT_BUFFER_READ_LEN] = {0};
     memset(result, 0xcc, BAT_BUFFER_READ_LEN);
 
-    /**
-     * This is to show you the way to use the ADC continuous mode driver event callback.
-     * This `ulTaskNotifyTake` will block when the data processing in the task is fast.
-     * However in this example, the data processing (print) is slow, so you barely block here.
-     *
-     * Without using this event callback (to notify this task), you can still just call
-     * `adc_continuous_read()` here in a loop, with/without a certain block timeout.
-     */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     uint32_t ret_num = 0;
@@ -152,7 +143,7 @@ void adc_task(void *arg)
             float bat_voltage = (float)(0.03585)*voltage; 
             battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
-            battery_report = true;
+            xEventGroupSetBits(report_event_group_handle, BATTER_REPORT);
             ESP_LOGD(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
                 average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage);
             gettimeofday(&last_battery_measurement_time, NULL);
@@ -166,6 +157,6 @@ void adc_task(void *arg)
     ESP_ERROR_CHECK(bat_adc_calibration_deinit(adc1_cali_chan0_handle));
     ESP_ERROR_CHECK(adc_continuous_stop(handle));
     ESP_ERROR_CHECK(adc_continuous_deinit(handle));
-    measuring_battery = false;
+    adc_task_handle = NULL;
     vTaskDelete(NULL);
 }

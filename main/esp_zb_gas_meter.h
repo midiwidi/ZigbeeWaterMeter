@@ -13,8 +13,16 @@
 
 extern const char *TAG;
 
-// when set to true the battery percentage and voltage 
-// will be included in the next report
-extern bool battery_report;
+// Report event group events
+#define CURRENT_SUMMATION_DELIVERED_REPORT  (1 << 0)
+#define INSTANTANEOUS_DEMAND_REPORT         (1 << 1)
+#define STATUS_REPORT                       (1 << 2)
+#define EXTENDED_STATUS_REPORT              (1 << 3)
+#define BATTER_REPORT                       (1 << 4)
 
+extern EventGroupHandle_t report_event_group_handle;
+
+extern QueueHandle_t deep_sleep_queue_handle;
+
+TickType_t dm_deep_sleep_time_ms();
 void gm_counter_set(const esp_zb_uint48_t *new_value);
