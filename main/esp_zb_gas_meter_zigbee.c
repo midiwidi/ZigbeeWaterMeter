@@ -46,6 +46,12 @@ uint64_t last_summation_sent = 0;
 // value for the ESP_ZB_ZCL_ATTR_IDENTIFY_IDENTIFY_TIME_ID attribute
 uint16_t identify_time = 0;
 
+uint8_t battery_alarm_mask = 0x03;
+
+uint8_t battery_voltage_rated = 74;
+
+uint8_t battery_quantity = 2;
+
 // value for the manufacturer_code, At this time this is whatever value 
 // I've never seen before. I don't know if there is a value for DIY devices
 uint16_t manufacturer_code = 0x8888;
@@ -126,7 +132,7 @@ esp_err_t zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_
 
 void zb_log_esp_zb_zcl_cmd_info_t(const char* prefix, const esp_zb_zcl_cmd_info_t *info)
 {
-    ESP_LOGI(TAG, "%s: from address(0x%x) src endpoint(%d) to dst address (0x%x) endpoint(%d) cluster(0x%x) profile(0x%x) transaction(0x%x) cmd id(0x%x) direction(0x%x) is_common(0x%x)",
+    ESP_LOGI(TAG, "%s:\n  From address(0x%x) src endpoint(%d)\n  To address (0x%x) endpoint(%d)\n    cluster(0x%x) profile(0x%x) transaction(%d)\n    cmd id(0x%x) direction(0x%x) is_common(0x%x)",
         prefix,
         info->src_address.u.short_addr, 
         info->src_endpoint,
@@ -148,7 +154,7 @@ esp_err_t zb_write_attr_resp_handler(const esp_zb_zcl_cmd_write_attr_resp_messag
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(0x%x)",
+    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(%d)",
         message->info.src_address.u.short_addr, 
         message->info.src_endpoint,
         message->info.dst_endpoint, 
@@ -238,6 +244,12 @@ esp_zb_zcl_status_t zb_radio_setup_report_values(EventBits_t uxBits)
         if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
             ESP_LOGE(TAG, "Updating value of battery voltage: %d", status);
         }
+        status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
+            ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID, &battery_alarm_state, false);
+        if (status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+            ESP_LOGE(TAG, "Updating value of battery alarm state: %d", status);
+        }
     }
     if ((uxBits & STATUS_REPORT) != 0) {
         status = esp_zb_zcl_set_attribute_val(MY_METERING_ENDPOINT,
@@ -271,29 +283,37 @@ void zb_radio_send_values(EventBits_t uxBits)
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "CurrentSummationDelivered reported");
     }
 
     if ((uxBits & INSTANTANEOUS_DEMAND_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_INSTANTANEOUS_DEMAND_ID;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "InstantaneousDemand reported");
     }
 
     if ((uxBits & BATTER_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "BatteryPercentageRemaining reported");
+        report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID;
+        ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "BatteryAlarmState reported");
     }
 
     if ((uxBits & STATUS_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "Status reported");
     }
 
     if ((uxBits & EXTENDED_STATUS_REPORT) != 0) {
         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_METERING_EXTENDED_STATUS_ID;
         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
         ESP_ERROR_CHECK(esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd));
+        ESP_LOGI(TAG, "ExtendedStatus reported");
     }
 }
 
@@ -332,6 +352,28 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
     }
     return ret;
 }
+
+void zb_command_handler(esp_zb_zcl_command_send_status_message_t message)
+{
+    ESP_LOGI(TAG, "In zb_command_handler");
+    ESP_LOGI(TAG, "  status(0x%x) transaction(%d)", message.status, message.tsn);
+}
+
+// bool zb_raw_command_handler(uint8_t bufid)
+// {
+//     ESP_LOGI(TAG, "In zb_raw_command_handler");
+//     ESP_LOGI(TAG, "  bufid(0x%x)", bufid);
+
+//     return false;
+// }
+
+// bool zb_device_cb_id(uint8_t bufid)
+// {
+//     ESP_LOGI(TAG, "In zb_device_cb_id");
+//     ESP_LOGI(TAG, "  bufid(0x%x)", bufid);
+
+//     return false;
+// }
 
 // initialize zigbee device
 void esp_zb_task(void *pvParameters) 
@@ -398,12 +440,12 @@ void esp_zb_task(void *pvParameters)
 
     /* power cluster */
     esp_zb_power_config_cluster_cfg_t power_cfg = {
-        .main_voltage = 33,
+        .main_voltage = 74,
         .main_freq = 0,
-        .main_alarm_mask = 0x07,
-        .main_voltage_min = 25,
-        .main_voltage_max = 33,
-        .main_voltage_dwell = 3600
+        .main_alarm_mask = 0x03,
+        .main_voltage_min = 70,
+        .main_voltage_max = 84,
+        .main_voltage_dwell = MUST_SYNC_MINIMUM_TIME
     };
 
     esp_zb_attribute_list_t *esp_zb_power_cluster = esp_zb_power_config_cluster_create(&power_cfg);
@@ -415,10 +457,31 @@ void esp_zb_task(void *pvParameters)
                                         ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
                                         &battery_percentage));
 
-    // ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
-    //                                     ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
-    //                                     &battery_alarm_state));
-        /* metering cluster */
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+                                        &battery_alarm_state));
+
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_MASK_ID,
+                                        &battery_alarm_mask));
+
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_MIN_THRESHOLD_ID,
+                                        &battery_voltage_min));
+
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD1_ID,
+                                        &battery_voltage_th1));
+
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_RATED_VOLTAGE_ID,
+                                        &battery_voltage_rated));
+
+    ESP_ERROR_CHECK(esp_zb_power_config_cluster_add_attr(esp_zb_power_cluster,
+                                        ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_QUANTITY_ID,
+                                        &battery_quantity));
+
+    /* metering cluster */
 
     // This code can't be used because current_summation_delivered reporting can't be configured
     // esp_zb_metering_cluster_cfg_t metering_cfg = {
@@ -529,6 +592,11 @@ void esp_zb_task(void *pvParameters)
     ESP_RETURN_ON_FALSE(ret == ESP_OK, , TAG, "Failed to register meter endpoint");
 
     esp_zb_core_action_handler_register(zb_action_handler);
+    // ESP_LOGI(TAG, "Registering additional callbacks");
+    // esp_zb_device_cb_id_handler_register(zb_device_cb_id);
+    // esp_zb_raw_command_handler_register(zb_raw_command_handler);
+    // esp_zb_zcl_command_send_status_handler_register(zb_command_handler);
+    // ESP_LOGI(TAG, "Additional callbacks registered");
 
     esp_zb_zcl_attr_location_info_t current_summation_delivered_location_info = {
         .attr_id = ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
@@ -566,14 +634,14 @@ void esp_zb_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(percentage_location_info));
 
-    // esp_zb_zcl_attr_location_info_t  battery_alarm_state_location_info = {
-    //     .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
-    //     .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
-    //     .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-    //     .endpoint_id = MY_METERING_ENDPOINT,
-    //     .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
-    // };
-    // ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(battery_alarm_state_location_info));
+    esp_zb_zcl_attr_location_info_t  battery_alarm_state_location_info = {
+        .attr_id = ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
+        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .endpoint_id = MY_METERING_ENDPOINT,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC
+    };
+    ESP_ERROR_CHECK(esp_zb_zcl_start_attr_reporting(battery_alarm_state_location_info));
 
     esp_zb_zcl_attr_location_info_t status_location_info = {
         .attr_id = ESP_ZB_ZCL_ATTR_METERING_STATUS_ID,
@@ -598,6 +666,7 @@ void esp_zb_task(void *pvParameters)
     ESP_ERROR_CHECK(esp_zb_set_secondary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK));
 
     ESP_ERROR_CHECK(esp_zb_start(false));
+
     esp_zb_stack_main_loop();
 }
 

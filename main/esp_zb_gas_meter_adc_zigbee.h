@@ -14,4 +14,6 @@
 // values to be sent to zigbee
 extern RTC_DATA_ATTR uint8_t battery_voltage;
 extern RTC_DATA_ATTR uint8_t battery_percentage;
-// extern RTC_DATA_ATTR uint32_t battery_alarm_state;
+extern RTC_DATA_ATTR uint32_t battery_alarm_state;
+extern uint8_t battery_voltage_min;
+extern uint8_t battery_voltage_th1;

@@ -24,6 +24,9 @@
 
 uint8_t battery_voltage = 0;
 uint8_t battery_percentage = 0;
+uint32_t battery_alarm_state = 0;
+uint8_t battery_voltage_min = 70;
+uint8_t battery_voltage_th1 = 72;
 
 struct timeval last_battery_measurement_time;
 
@@ -144,8 +147,20 @@ void adc_task(void *arg)
             battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
             xEventGroupSetBits(report_event_group_handle, BATTER_REPORT);
-            ESP_LOGD(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d", 
-                average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage);
+
+            if (battery_voltage < battery_voltage_th1) {
+                battery_alarm_state |= (1 << 1); // BatteryVoltageThreshold1 or BatteryPercentageThreshold1 reached for Battery Source 1
+            } else {
+                battery_alarm_state &= ~(1 << 1);
+            }
+            if (battery_voltage < battery_voltage_min) {
+                battery_alarm_state |= (1 << 0); // BatteryVoltageMinThreshold or BatteryPercentageMinThreshold reached for Battery Source 1
+            } else {
+                battery_alarm_state &= ~(1 << 0);
+            }
+
+            ESP_LOGI(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d Alarm 0x%lx", 
+                average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage, battery_alarm_state);
             gettimeofday(&last_battery_measurement_time, NULL);
         }
     } else if (ret == ESP_ERR_TIMEOUT) {

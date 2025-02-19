@@ -211,14 +211,23 @@ void check_shall_measure_battery()
 }
 
 // Adds one to current_summation_delivered and nothing else
-void gm_counter_increment()
+void gm_counter_increment(bool fromISR)
 {
     current_summation_delivered.low += 1; // Adds up 1 cent of m³
     if (current_summation_delivered.low == 0) {
         current_summation_delivered.high += 1;
     }
-    xEventGroupSetBits(report_event_group_handle, CURRENT_SUMMATION_DELIVERED_REPORT);
-    xTaskNotifyGive(save_counter_task_handle);
+    if (fromISR) {
+        BaseType_t mustYield = pdFALSE;
+        xEventGroupSetBitsFromISR(report_event_group_handle, CURRENT_SUMMATION_DELIVERED_REPORT, &mustYield);
+        portYIELD_FROM_ISR(mustYield);
+        mustYield = pdFALSE;
+        vTaskNotifyGiveFromISR(save_counter_task_handle, &mustYield);
+        portYIELD_FROM_ISR(mustYield);
+    } else {
+        xEventGroupSetBits(report_event_group_handle, CURRENT_SUMMATION_DELIVERED_REPORT);
+        xTaskNotifyGive(save_counter_task_handle);
+    }
 }
 
 // function called when the device leaves the zigee network
@@ -332,7 +341,7 @@ void btn_long_press_stop_task(void *arg)
 // computes the instantaneous_demand
 // NOTE: there is one special task to set instantaneous demand to 0 when no
 // values arrive
-void gm_compute_instantaneous_demand(const struct timeval *now, const bool save_time)
+void gm_compute_instantaneous_demand(const struct timeval *now, const bool save_time, bool fromISR)
 {
     if (last_pulse_time.tv_sec != 0 || last_pulse_time.tv_usec != 0)
     {
@@ -357,9 +366,20 @@ void gm_compute_instantaneous_demand(const struct timeval *now, const bool save_
             if (new_instantaneous_demand.low != instantaneous_demand.low || new_instantaneous_demand.high != instantaneous_demand.high) {
                 instantaneous_demand.low = new_instantaneous_demand.low;
                 instantaneous_demand.high = new_instantaneous_demand.high;
-                xEventGroupSetBits(report_event_group_handle, INSTANTANEOUS_DEMAND_REPORT);
-                if (xTimerStart(reset_instantaneous_demand_timer, pdMS_TO_TICKS(100)) != pdPASS) {
-                    ESP_LOGE(TAG, "Can't reset instantaneous demand timer");
+                if (fromISR) {
+                    BaseType_t mustYield = pdFALSE;
+                    xEventGroupSetBitsFromISR(report_event_group_handle, INSTANTANEOUS_DEMAND_REPORT, &mustYield);
+                    portYIELD_FROM_ISR(mustYield);
+                    mustYield = pdFALSE;
+                    if (xTimerStartFromISR(reset_instantaneous_demand_timer, &mustYield) != pdPASS) {
+                        ESP_LOGE(TAG, "Can't reset instantaneous demand timer");
+                    }
+                    portYIELD_FROM_ISR(mustYield);
+                } else {
+                    xEventGroupSetBits(report_event_group_handle, INSTANTANEOUS_DEMAND_REPORT);
+                    if (xTimerStart(reset_instantaneous_demand_timer, pdMS_TO_TICKS(100)) != pdPASS) {
+                        ESP_LOGE(TAG, "Can't reset instantaneous demand timer");
+                    }
                 }
             }
         }
@@ -510,8 +530,8 @@ esp_err_t gm_deep_sleep_init()
                 // if PULSE_PIN is low AND check_gpio_time is true we 
                 // miss the interrupt so count it now
                 if (level == 0) {
-                    gm_counter_increment();
-                    gm_compute_instantaneous_demand(&gpio_time, true);
+                    gm_counter_increment(false);
+                    gm_compute_instantaneous_demand(&gpio_time, true, false);
                 } else {
                     TickType_t deep_sleep_time = portMAX_DELAY;
                     if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
@@ -568,8 +588,8 @@ void IRAM_ATTR gpio_pulse_isr_handler(void* arg)
     int level = gpio_get_level(PULSE_PIN);
     if (level == 0) {
         // failing
-        gm_counter_increment();
-        gm_compute_instantaneous_demand(&now, true);
+        gm_counter_increment(true);
+        gm_compute_instantaneous_demand(&now, true, true);
     } else {
         // rising, the device while NOT in deep sleep mode. At this moment, if there
         // is no activity in 30 seconds, the device will try to enter deep sleep but
@@ -690,14 +710,9 @@ void app_main(void)
     ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
-    ESP_ERROR_CHECK(gm_gpio_interrup_init());
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_zb_power_save_init());
+    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 5, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK((main_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK((report_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
-    ESP_ERROR_CHECK(gm_counter_load_nvs());
-    
-    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 5, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK(xTaskCreate(btn_long_press_start_task, "long_press_start", 2048, NULL, 4, &btn_start_task_handle) != pdPASS);
     ESP_ERROR_CHECK(xTaskCreate(btn_long_press_stop_task, "long_press_stop", 2048, NULL, 4, &btn_stop_task_handle) != pdPASS);
     ESP_ERROR_CHECK(
@@ -713,6 +728,12 @@ void app_main(void)
         ? ESP_FAIL 
         : ESP_OK
     );
+
+    ESP_ERROR_CHECK(gm_gpio_interrup_init());
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_zb_power_save_init());
+    ESP_ERROR_CHECK(gm_counter_load_nvs());
+    
     ESP_ERROR_CHECK(gm_deep_sleep_init());
     ESP_ERROR_CHECK(xTaskCreate(deep_sleep_controller_task, "deep_sleep", 2048, NULL, 4, NULL) != pdPASS);
 

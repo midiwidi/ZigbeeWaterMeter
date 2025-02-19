@@ -16,7 +16,7 @@
 #include "zcl/esp_zigbee_zcl_metering.h"
 
 // Maximum time to force a device report
-#define MUST_SYNC_MINIMUM_TIME          (24 * 60 * 60) // 1 day in seconds
+#define MUST_SYNC_MINIMUM_TIME          UINT16_C(65535) // 1 day in seconds
 
 // time to send the device to deep sleep when Zigbee radio is on
 #define TIME_TO_SLEEP_ZIGBEE_ON         UINT32_C(30 * 1000) // milliseconds
