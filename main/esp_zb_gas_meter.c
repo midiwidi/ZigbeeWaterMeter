@@ -317,7 +317,7 @@ void btn_long_press_start_task(void *arg)
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         xEventGroupSetBits(main_event_group_handle, SHALL_ENABLE_ZIGBEE);
-        TickType_t deep_sleep_time = dm_deep_sleep_time_ms();
+        TickType_t deep_sleep_time = pdMS_TO_TICKS(TIME_TO_SLEEP_ZIGBEE_ON);
         if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
             ESP_LOGE(TAG, "Can't reschedule deep sleep timer");
         xEventGroupSetBits(report_event_group_handle, 
@@ -419,13 +419,13 @@ void gm_main_loop_task(void *arg)
         );
         if (uxBits != 0) {
             if (((uxBits & SHALL_MEASURE_BATTERY) != 0) && adc_task_handle == NULL) {
-                if (xTaskCreate(adc_task, "adc", 4096, NULL, 4, &adc_task_handle) != pdTRUE)
+                if (xTaskCreate(adc_task, "adc", 4096, NULL, 10, &adc_task_handle) != pdTRUE)
                     ESP_LOGE(TAG, "Can't create adc task to measure battery");
                 ESP_LOGI(TAG, "Measuring battery capacity");
             }
             if (((uxBits & SHALL_ENABLE_ZIGBEE) != 0 ) && zigbee_task_handle == NULL) {
                 /* Start Zigbee stack task */
-                if (xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, 5, &zigbee_task_handle) != pdTRUE)
+                if (xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, 10, &zigbee_task_handle) != pdTRUE)
                     ESP_LOGE(TAG, "can't create zigbee task");
                 ESP_LOGI(TAG, "Turning on Zigbee radio");
             }
@@ -435,7 +435,7 @@ void gm_main_loop_task(void *arg)
                 // depends on https://github.com/espressif/esp-zigbee-sdk/issues/561
                 // at the end it is required to set:
                 //  zigbee_enabled = false;
-                //  zigbee_task_handle = NULL;
+                zigbee_task_handle = NULL;
             }
         } else {
             check_shall_measure_battery();
@@ -710,11 +710,11 @@ void app_main(void)
     ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
-    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 5, &save_counter_task_handle) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 15, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK((main_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK((report_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
-    ESP_ERROR_CHECK(xTaskCreate(btn_long_press_start_task, "long_press_start", 2048, NULL, 4, &btn_start_task_handle) != pdPASS);
-    ESP_ERROR_CHECK(xTaskCreate(btn_long_press_stop_task, "long_press_stop", 2048, NULL, 4, &btn_stop_task_handle) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(btn_long_press_start_task, "long_press_start", 2048, NULL, 5, &btn_start_task_handle) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(btn_long_press_stop_task, "long_press_stop", 2048, NULL, 5, &btn_stop_task_handle) != pdPASS);
     ESP_ERROR_CHECK(
         (reset_instantaneous_demand_timer = 
             xTimerCreate(
@@ -735,7 +735,7 @@ void app_main(void)
     ESP_ERROR_CHECK(gm_counter_load_nvs());
     
     ESP_ERROR_CHECK(gm_deep_sleep_init());
-    ESP_ERROR_CHECK(xTaskCreate(deep_sleep_controller_task, "deep_sleep", 2048, NULL, 4, NULL) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(deep_sleep_controller_task, "deep_sleep", 2048, NULL, 20, NULL) != pdPASS);
 
     // start main loop
     ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);

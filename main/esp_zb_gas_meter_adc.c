@@ -87,7 +87,7 @@ void bat_continuous_adc_init(const adc_channel_t channel, adc_continuous_handle_
 
     adc_continuous_config_t dig_cfg = {
         .pattern_num = 1,
-        .sample_freq_hz = 20 * 1000,
+        .sample_freq_hz = SOC_ADC_SAMPLE_FREQ_THRES_LOW,
         .conv_mode = ADC_CONV_SINGLE_UNIT_1,
         .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
     };
