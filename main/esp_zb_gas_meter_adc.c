@@ -12,6 +12,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_check.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 
 #include "esp_zb_gas_meter.h"
@@ -110,6 +111,8 @@ void adc_task(void *arg)
     ESP_LOGD(TAG, "ADC Task Init...");
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
 
+    gpio_set_level(BAT_MON_ENABLE, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
     bat_continuous_adc_init(channel, &handle);
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = bat_conv_done_cb,
@@ -122,6 +125,7 @@ void adc_task(void *arg)
     memset(result, 0xcc, BAT_BUFFER_READ_LEN);
 
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    gpio_set_level(BAT_MON_ENABLE, 0);
 
     uint32_t ret_num = 0;
     esp_err_t ret = adc_continuous_read(handle, result, BAT_BUFFER_READ_LEN, &ret_num, 0);
@@ -143,7 +147,7 @@ void adc_task(void *arg)
             int voltage;
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, average, &voltage));
             // convert to 2s lipo ranges and mult by 10
-            float bat_voltage = (float)(0.03585)*voltage; 
+            float bat_voltage = (float)(0.038068)*voltage; 
             battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
             xEventGroupSetBits(report_event_group_handle, BATTER_REPORT);

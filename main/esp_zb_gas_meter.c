@@ -38,14 +38,11 @@
 // input - pin for the main button
 #define MAIN_BTN                        GPIO_NUM_4
 
-// output - pin to enable battery voltage to the adc converter
-#define BAT_MON_ENABLE                  GPIO_NUM_6
-
 // input - pin to measure battery voltage
 #define BAT_VLTG                        GPIO_NUM_0
 
 // amount of time to ignore a digital input pin interrupt repetition
-#define DEBOUNCE_TIMEOUT                50 /* milliseconds */
+#define DEBOUNCE_TIMEOUT                20 /* milliseconds */
 
 /* Human interaction and device configuration */
 
@@ -239,18 +236,22 @@ void leave_callback(esp_zb_zdp_status_t zdo_status, void* args)
 // long press detected
 void longpress_cb(TimerHandle_t xTimer)
 {
-    ESP_LOGI(TAG, "Button long press detected");
-    uint16_t short_address = esp_zb_get_short_address();
-    if (short_address != 0xfffe) {
-        ESP_LOGD(TAG, "Leaving network");
-        esp_zb_zdo_mgmt_leave_req_param_t leave_request = {
-            .device_address = {},
-            .dst_nwk_addr = 0xFFFF,
-            .remove_children = 0,
-            .rejoin = 0
-        };
-        esp_zb_get_long_address(leave_request.device_address);
-        esp_zb_zdo_device_leave_req(&leave_request, leave_callback, NULL);
+    // make sure the button is still pressed
+    int level = gpio_get_level(MAIN_BTN);
+    if (level == 1) {
+        ESP_LOGI(TAG, "Button long press detected");
+        uint16_t short_address = esp_zb_get_short_address();
+        if (short_address != 0xfffe) {
+            ESP_LOGD(TAG, "Leaving network");
+            esp_zb_zdo_mgmt_leave_req_param_t leave_request = {
+                .device_address = {},
+                .dst_nwk_addr = 0xFFFF,
+                .remove_children = 0,
+                .rejoin = 0
+            };
+            esp_zb_get_long_address(leave_request.device_address);
+            esp_zb_zdo_device_leave_req(&leave_request, leave_callback, NULL);
+        }
     }
 }
 
@@ -518,9 +519,11 @@ esp_err_t gm_deep_sleep_init()
                 xEventGroupSetBits(main_event_group_handle, SHALL_ENABLE_ZIGBEE);
                 xEventGroupSetBits(report_event_group_handle, CURRENT_SUMMATION_DELIVERED_REPORT);
                 int level = gpio_get_level(MAIN_BTN);
-                if (level != 0) {
+                if (level == 0) {
+                    xTaskNotifyGive(btn_stop_task_handle);
+                } else {
                     xTaskNotifyGive(btn_start_task_handle);
-                }    
+                }
                 resolved = true;
             }
             if ((ext1mask & gpio_pulse_pin_mask) == gpio_pulse_pin_mask) { // wakeup from PULSE_PIN
