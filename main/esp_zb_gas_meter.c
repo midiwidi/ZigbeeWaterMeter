@@ -426,6 +426,9 @@ void gm_main_loop_task(void *arg)
             }
             if (((uxBits & SHALL_ENABLE_ZIGBEE) != 0 ) && zigbee_task_handle == NULL) {
                 /* Start Zigbee stack task */
+                TickType_t deep_sleep_time = pdMS_TO_TICKS(TIME_TO_SLEEP_ZIGBEE_ON);
+                if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
+                    ESP_LOGE(TAG, "Can't reschedule deep sleep timer");        
                 if (xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, 10, &zigbee_task_handle) != pdTRUE)
                     ESP_LOGE(TAG, "can't create zigbee task");
                 ESP_LOGI(TAG, "Turning on Zigbee radio");
@@ -457,8 +460,6 @@ void enter_deep_sleep_cb(TimerHandle_t xTimer)
 // configure deep sleep for the gas meter
 esp_err_t gm_deep_sleep_init()
 {
-    deep_sleep_queue_handle = xQueueCreate(1, sizeof(TickType_t));
-
     ESP_RETURN_ON_ERROR(
         (deep_sleep_timer = 
             xTimerCreate(
@@ -713,6 +714,7 @@ void app_main(void)
     ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
 
+    ESP_ERROR_CHECK((deep_sleep_queue_handle = xQueueCreate(1, sizeof(TickType_t))) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 15, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK((main_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK((report_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);

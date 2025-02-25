@@ -150,6 +150,8 @@ void adc_task(void *arg)
             float bat_voltage = (float)(0.038068)*voltage; 
             battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
+            if (battery_percentage > 200)
+                battery_percentage = 200;
             xEventGroupSetBits(report_event_group_handle, BATTER_REPORT);
 
             if (battery_voltage < battery_voltage_th1) {
