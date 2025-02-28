@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "hal/ieee802154_ll.h"
 
+#include "esp_zb_gas_version.h"
 #include "esp_zb_gas_meter.h"
 #include "esp_zb_gas_meter_zigbee.h"
 #include "esp_zb_gas_meter_adc_zigbee.h"
@@ -55,7 +56,7 @@ uint8_t battery_quantity = 2;
 
 // value for the manufacturer_code, At this time this is whatever value 
 // I've never seen before. I don't know if there is a value for DIY devices
-uint16_t manufacturer_code = 0x8888;
+uint16_t manufacturer_code = HW_MANUFACTURER_CODE;
 
 // Formatting current_summation_delivered with 7 digits and 2 decimal places
 uint8_t summation_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 7, 2) ;// 0x72;
@@ -321,7 +322,7 @@ void zb_radio_send_values(EventBits_t uxBits)
 // Attribute handler
 esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message) 
 {
-    ESP_LOGI(TAG, "In zb_action_handler callback_id=0x%x", callback_id);
+    ESP_LOGD(TAG, "In zb_action_handler callback_id=0x%04x", callback_id);
     esp_err_t ret = ESP_OK;
     switch (callback_id) {
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
@@ -344,17 +345,17 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
                 gm_counter_set(setAtrMsg->attribute.data.value);
             }
         break;
-    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
+    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 4101
         ret = zb_cmd_default_resp_handler((esp_zb_zcl_cmd_default_resp_message_t*)message);
         break;
-    case ESP_ZB_CORE_OTA_UPGRADE_VALUE_CB_ID:
+    case ESP_ZB_CORE_OTA_UPGRADE_VALUE_CB_ID: // 0x0004
         ret = zb_ota_upgrade_status_handler(*(esp_zb_zcl_ota_upgrade_value_message_t *)message);
         break;
     case ESP_ZB_CORE_OTA_UPGRADE_QUERY_IMAGE_RESP_CB_ID:
         ret = zb_ota_upgrade_query_image_resp_handler(*(esp_zb_zcl_ota_upgrade_query_image_resp_message_t *)message);
         break;
     default:
-        ESP_LOGW(TAG, "Receive Zigbee action(0x%x) callback", callback_id);
+        ESP_LOGW(TAG, "Receive Zigbee action(0x%04x) callback", callback_id);
         break;
     }
     return ret;

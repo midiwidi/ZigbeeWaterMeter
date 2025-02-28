@@ -11,13 +11,9 @@
  */
 #include "esp_err.h"
 #include "zcl/esp_zigbee_zcl_command.h"
+#include "esp_zb_gas_version.h"
 
-#define OTA_UPGRADE_HW_VERSION          0x0101
-#define OTA_UPGRADE_IMAGE_TYPE          0x1011
-#define HW_VERSION                      0x01
-#define OTA_FILE_VERSION                0x01010104
 #define OTA_UPGRADE_MAX_DATA_SIZE       223
-
 #define OTA_ELEMENT_HEADER_LEN          6
 
 extern uint16_t zigbee_zcl_version;
