@@ -10,11 +10,12 @@
  * as you credit the original author(s) and share any derivatives under the same license.
  */
 #include "esp_zigbee_type.h"
+#include "freertos/FreeRTOS.h"
 
 extern const char *TAG;
 
 // output - pin to enable battery voltage to the adc converter
-#define BAT_MON_ENABLE                  GPIO_NUM_6
+#define BAT_MON_ENABLE                  		GPIO_NUM_6
 
 // Report event group events
 #define CURRENT_SUMMATION_DELIVERED_REPORT  (1 << 0)
@@ -23,9 +24,21 @@ extern const char *TAG;
 #define EXTENDED_STATUS_REPORT              (1 << 3)
 #define BATTER_REPORT                       (1 << 4)
 
+// Main group events
+#define SHALL_MEASURE_BATTERY           (1 << 0)
+#define SHALL_ENABLE_ZIGBEE             (1 << 1)
+// this is not implemented because of lack of support from esp-zigbee-sdk
+// see https://github.com/espressif/esp-zigbee-sdk/issues/561
+#define SHALL_DISABLE_ZIGBEE            (1 << 2) 
+#define SHALL_STOP_DEEP_SLEEP						(1 << 3)
+#define SHALL_START_DEEP_SLEEP					(1 << 4)
+
 extern EventGroupHandle_t report_event_group_handle;
+extern EventGroupHandle_t main_event_group_handle;
 
 extern QueueHandle_t deep_sleep_queue_handle;
+extern TaskHandle_t deep_sleep_task_handle;
+
 
 TickType_t dm_deep_sleep_time_ms();
 void gm_counter_set(const esp_zb_uint48_t *new_value);

@@ -17,6 +17,7 @@
 #include "esp_zb_gas_meter.h"
 #include "esp_zb_gas_meter_zigbee.h"
 #include "esp_zb_gas_meter_adc_zigbee.h"
+#include "esp_zb_gas_ota.h"
 
 /* Zigbee configuration */
 #define ED_AGING_TIMEOUT                ESP_ZB_ED_AGING_TIMEOUT_64MIN
@@ -26,7 +27,7 @@
 
 #define ESP_MANUFACTURER_NAME           "\x06""MICASA"
 #define ESP_MODEL_IDENTIFIER            "\x08""GasMeter" /* Customized model identifier */
-#define ESP_DATE_CODE                   "\x08""20250228"
+#define ESP_DATE_CODE                   "\x08""20250301"
 #define ESP_PRODUCT_URL                 "\x2B""https://github.com/IgnacioHR/ZigbeeGasMeter"
 
 esp_zb_uint48_t current_summation_delivered = {
@@ -346,6 +347,12 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
     case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 0x1005
         ret = zb_cmd_default_resp_handler((esp_zb_zcl_cmd_default_resp_message_t*)message);
         break;
+    case ESP_ZB_CORE_OTA_UPGRADE_VALUE_CB_ID:
+        ret = zb_ota_upgrade_status_handler(*(esp_zb_zcl_ota_upgrade_value_message_t *)message);
+        break;
+    case ESP_ZB_CORE_OTA_UPGRADE_QUERY_IMAGE_RESP_CB_ID:
+        ret = zb_ota_upgrade_query_image_resp_handler(*(esp_zb_zcl_ota_upgrade_query_image_resp_message_t *)message);
+        break;
     default:
         ESP_LOGW(TAG, "Receive Zigbee action(0x%x) callback", callback_id);
         break;
@@ -403,7 +410,7 @@ void esp_zb_task(void *pvParameters)
     esp_zb_init(&zb_nwk_cfg);
 
     esp_zb_basic_cluster_cfg_t basic_cfg = {
-        .zcl_version = 8,
+        .zcl_version = zigbee_zcl_version,
         .power_source = 0x03,
     };
 
@@ -425,6 +432,9 @@ void esp_zb_task(void *pvParameters)
     ));
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, 
         ESP_ZB_ZCL_ATTR_BASIC_PRODUCT_URL_ID, ESP_PRODUCT_URL
+    ));
+    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, 
+        ESP_ZB_ZCL_ATTR_BASIC_HW_VERSION_ID, &hw_version
     ));
 
     /* identify cluster create with fully customized */
@@ -571,6 +581,24 @@ void esp_zb_task(void *pvParameters)
     /* client identify cluster */
     esp_zb_attribute_list_t *esp_zb_identify_client_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY);
 
+    /* ota cluster */
+    // const esp_app_desc_t *app_desc = esp_app_get_description();
+
+    esp_zb_ota_cluster_cfg_t ota_cluster_cfg = {
+        // .ota_upgrade_file_version = app_desc->secure_version,
+        .ota_upgrade_file_version = OTA_FILE_VERSION,
+        .ota_upgrade_manufacturer = manufacturer_code,
+        .ota_upgrade_image_type = OTA_UPGRADE_IMAGE_TYPE,
+    };
+    esp_zb_attribute_list_t *esp_zb_ota_cluster = esp_zb_ota_cluster_create(&ota_cluster_cfg);
+    ESP_ERROR_CHECK(esp_zb_ota_cluster_add_attr(esp_zb_ota_cluster, ESP_ZB_ZCL_ATTR_OTA_UPGRADE_STACK_VERSION_ID, &zigbee_stack_version));
+    esp_zb_zcl_ota_upgrade_client_variable_t variable_config = {
+        .timer_query = ESP_ZB_ZCL_OTA_UPGRADE_QUERY_TIMER_COUNT_DEF,
+        .hw_version = OTA_UPGRADE_HW_VERSION,
+        .max_data_size = OTA_UPGRADE_MAX_DATA_SIZE,
+    };
+    ESP_ERROR_CHECK(esp_zb_ota_cluster_add_attr(esp_zb_ota_cluster, ESP_ZB_ZCL_ATTR_OTA_UPGRADE_CLIENT_DATA_ID, &variable_config));
+
     /* create cluster lists for this endpoint */
     esp_zb_cluster_list_t *esp_zb_meter_cluster_list = esp_zb_zcl_cluster_list_create();
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(esp_zb_meter_cluster_list, esp_zb_basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
@@ -578,6 +606,7 @@ void esp_zb_task(void *pvParameters)
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(esp_zb_meter_cluster_list, esp_zb_identify_client_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_metering_cluster(esp_zb_meter_cluster_list, esp_zb_metering_server_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_power_config_cluster(esp_zb_meter_cluster_list, esp_zb_power_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_ota_cluster(esp_zb_meter_cluster_list, esp_zb_ota_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
 
     esp_zb_ep_list_t *esp_zb_ep_meter_list = esp_zb_ep_list_create();
     esp_zb_endpoint_config_t endpoint_config = {
@@ -713,9 +742,11 @@ void gm_main_loop_zigbee_task(void *arg)
                 last_summation_sent <<= 32;
                 last_summation_sent |= current_summation_delivered.low;
             }
-            TickType_t deep_sleep_time = dm_deep_sleep_time_ms();
-            if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
-                ESP_LOGE(TAG, "Can't reschedule deep sleep timer");    
+            if (deep_sleep_task_handle != NULL) {
+                TickType_t deep_sleep_time = dm_deep_sleep_time_ms();
+                if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
+                    ESP_LOGE(TAG, "Can't reschedule deep sleep timer");
+            }
         }
     }
 }

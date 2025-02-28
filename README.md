@@ -9,6 +9,7 @@ This project is a DIY Zigbee-enabled gas meter that measures and tracks gas cons
 - Battery-powered for installation flexibility.
 - Built-in counter to prevent data loss if the network or Home Assistant goes offline.
 - Easy setup and minimal hardware requirements.
+- OTA firmware update.
 
 ## Why Zigbee for DIY Projects?
 
@@ -48,6 +49,10 @@ After searching for commercial Zigbee gas meters and finding none, I decided to 
 This project is still in the development phase. While it is not yet deployed for real gas consumption measurement, I have a working prototype on an **ESP32-C6-WROOM-1 development board** in a test environment. The prototype uses two buttons: one simulating the gas meter pulses and the other functioning as the main device button. The software is fully operational, I'm actually working on the hardware side.
 
 For the time being, I've decided to use a 2S lipo battery that can hold 8.4v and can be safely discharged to 7.0v. I've already develop the software to report battery at 100% level when it is 8.4v and 0% when it is 7.0v. There is also an attribute to get the battery voltage in millivolts.
+
+I've provided an update to Zigbee2mqtt to generalise the seMetering cluster so it can be used for electrical meters and gas meters. Hopefully that will simplify a lot the code to add to the external converters and that code can be reused by others
+
+I've just implemented and tested OTA support so in theory I could just distribute new firmware versions
 
 ### What is missing and how you can help
 
@@ -159,10 +164,8 @@ If you want to contribute or improve this project, feel free to fork the reposit
 
 Here are the planned improvements:
 
-1. Implement battery measuring.
-2. Design a custom PCB for the ESP32-C6, connectors and resistors.
-3. Create a 3D-printed enclosure for secure installation.
-4. OTA support.
+1. Design a custom PCB for the ESP32-C6, connectors and resistors.
+2. Create a 3D-printed enclosure for secure installation.
 
 ## Acknowledgments
 

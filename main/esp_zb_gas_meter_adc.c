@@ -112,7 +112,7 @@ void adc_task(void *arg)
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
 
     gpio_set_level(BAT_MON_ENABLE, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(5000));
     bat_continuous_adc_init(channel, &handle);
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = bat_conv_done_cb,
@@ -147,7 +147,7 @@ void adc_task(void *arg)
             int voltage;
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, average, &voltage));
             // convert to 2s lipo ranges and mult by 10
-            float bat_voltage = (float)(0.038068)*voltage; 
+            float bat_voltage = (float)(0.036207)*voltage; 
             battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
             battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
             if (battery_percentage > 200)
