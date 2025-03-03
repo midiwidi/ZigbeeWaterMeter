@@ -14,4 +14,4 @@
 #define OTA_UPGRADE_HW_VERSION          0x0101
 #define OTA_UPGRADE_IMAGE_TYPE          0x1011
 #define HARDWARE_VERSION                0x01
-#define OTA_FILE_VERSION                0x01010107
+#define OTA_FILE_VERSION                0x01010101

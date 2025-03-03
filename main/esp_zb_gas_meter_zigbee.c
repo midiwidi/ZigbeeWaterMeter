@@ -322,7 +322,7 @@ void zb_radio_send_values(EventBits_t uxBits)
 // Attribute handler
 esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message) 
 {
-    ESP_LOGD(TAG, "In zb_action_handler callback_id=0x%04x", callback_id);
+    ESP_LOGI(TAG, "In zb_action_handler callback_id=0x%04x", callback_id);
     esp_err_t ret = ESP_OK;
     switch (callback_id) {
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID:
@@ -696,7 +696,7 @@ void esp_zb_task(void *pvParameters)
     ESP_ERROR_CHECK(esp_zb_set_secondary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK));
 
     ESP_ERROR_CHECK(esp_zb_start(false));
-
+    ESP_LOGI(TAG, "Starting Zigbee Main Loop");
     esp_zb_stack_main_loop();
 }
 
