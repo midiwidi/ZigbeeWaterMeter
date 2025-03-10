@@ -31,8 +31,8 @@
 extern esp_zb_uint48_t current_summation_delivered;
 
 // device status and extended status
-extern uint8_t device_status;
-extern uint64_t device_extended_status;
+extern RTC_DATA_ATTR uint8_t device_status;
+extern RTC_DATA_ATTR uint64_t device_extended_status;
 
 // Measure instantaneous demand as int24
 extern esp_zb_int24_t instantaneous_demand;

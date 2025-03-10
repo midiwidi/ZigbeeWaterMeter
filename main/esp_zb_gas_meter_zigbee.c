@@ -340,10 +340,13 @@ esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const 
     case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID: // 0x0000 attribute value set
         esp_zb_zcl_set_attr_value_message_t* setAtrMsg = (esp_zb_zcl_set_attr_value_message_t*)message;
         if (setAtrMsg->info.dst_endpoint == MY_METERING_ENDPOINT && 
+            setAtrMsg->attribute.id == ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID &&
             setAtrMsg->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
-            setAtrMsg->attribute.id == ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID) {
-                gm_counter_set(setAtrMsg->attribute.data.value);
-            }
+            setAtrMsg->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U48 &&
+            setAtrMsg->attribute.data.size == sizeof(esp_zb_uint48_t)
+        ) {
+            gm_counter_set(setAtrMsg->attribute.data.value);
+        }
         break;
     case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: // 4101
         ret = zb_cmd_default_resp_handler((esp_zb_zcl_cmd_default_resp_message_t*)message);

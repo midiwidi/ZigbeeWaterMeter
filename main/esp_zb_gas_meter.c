@@ -391,39 +391,6 @@ void deep_sleep_controller_task(void *arg)
     }
 }
 
-// Stops the timer responsible of detecting MAIN BUTTON long press
-void btn_longpress_stop()
-{
-    if (xTimerStop(long_press_timer, pdMS_TO_TICKS(100)) == pdPASS)
-    {
-        ESP_LOGD(TAG, "Stop long press timer");
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Error stoping long press timer");
-    };
-}
-
-// Starts the timer responsible of detecting MAIN BUTTON long press
-void btn_longpress_start()
-{
-    int before_longpress_time_msec = LONG_PRESS_TIMEOUT * 1000;
-    if (started_from_deep_sleep)
-    {
-        before_longpress_time_msec -= 150; // measured time for the device to start
-    }
-    ESP_LOGD(TAG, "Start long press timer for %dms", before_longpress_time_msec);
-    if (xTimerChangePeriod(long_press_timer, pdMS_TO_TICKS(before_longpress_time_msec), pdMS_TO_TICKS(100)) != pdPASS)
-    {
-        ESP_LOGE(TAG, "Can't set long press timer time to %dms", before_longpress_time_msec);
-        return;
-    };
-    if (xTimerStart(long_press_timer, pdMS_TO_TICKS(100)) != pdPASS)
-    {
-        ESP_LOGE(TAG, "Can't start long press timer");
-    }
-}
-
 // task to start long press detector
 void btn_long_press_start_task(void *arg)
 {
@@ -440,7 +407,25 @@ void btn_long_press_start_task(void *arg)
         xEventGroupSetBits(report_event_group_handle,
                            CURRENT_SUMMATION_DELIVERED_REPORT | BATTER_REPORT | STATUS_REPORT | EXTENDED_STATUS_REPORT);
         xEventGroupSetBits(main_event_group_handle, SHALL_MEASURE_BATTERY);
-        btn_longpress_start();
+            // reset device status
+        device_status = 0x0;
+        device_extended_status = 0x0;
+        
+        int before_longpress_time_msec = LONG_PRESS_TIMEOUT * 1000;
+        if (started_from_deep_sleep)
+        {
+            before_longpress_time_msec -= 150; // measured time for the device to start
+        }
+        ESP_LOGD(TAG, "Start long press timer for %dms", before_longpress_time_msec);
+        if (xTimerChangePeriod(long_press_timer, pdMS_TO_TICKS(before_longpress_time_msec), pdMS_TO_TICKS(100)) != pdPASS)
+        {
+            ESP_LOGE(TAG, "Can't set long press timer time to %dms", before_longpress_time_msec);
+            return;
+        };
+        if (xTimerStart(long_press_timer, pdMS_TO_TICKS(100)) != pdPASS)
+        {
+            ESP_LOGE(TAG, "Can't start long press timer");
+        }
     }
 }
 
@@ -450,7 +435,14 @@ void btn_long_press_stop_task(void *arg)
     while (true)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        btn_longpress_stop();
+        if (xTimerStop(long_press_timer, pdMS_TO_TICKS(100)) == pdPASS)
+        {
+            ESP_LOGD(TAG, "Stop long press timer");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "Error stoping long press timer");
+        };    
     }
 }
 
@@ -508,6 +500,12 @@ void gm_main_loop_task(void *arg)
                 // depends on https://github.com/espressif/esp-zigbee-sdk/issues/561
                 // at the end it is required to set:
                 //  zigbee_enabled = false;
+                if (deep_sleep_task_handle != NULL)
+                {
+                    TickType_t deep_sleep_time = portMAX_DELAY;
+                    if (xQueueSendToFront(deep_sleep_queue_handle, &deep_sleep_time, pdMS_TO_TICKS(100)) != pdTRUE)
+                        ESP_LOGE(TAG, "Can't reschedule deep sleep timer");
+                }
                 zigbee_task_handle = NULL;
             }
             if (((uxBits & SHALL_START_DEEP_SLEEP) != 0) && deep_sleep_task_handle == NULL)
@@ -554,32 +552,6 @@ void enter_deep_sleep_cb(TimerHandle_t xTimer)
 // configure deep sleep for the gas meter
 esp_err_t gm_deep_sleep_init()
 {
-    ESP_RETURN_ON_ERROR(
-        (deep_sleep_timer =
-             xTimerCreate(
-                 "deep_sleep_timer",
-                 portMAX_DELAY,
-                 pdFALSE,
-                 "d_s_t",
-                 enter_deep_sleep_cb)) == NULL
-            ? ESP_FAIL
-            : ESP_OK,
-        TAG,
-        "Can't create deep sleep timer");
-
-    ESP_RETURN_ON_ERROR(
-        (long_press_timer =
-             xTimerCreate(
-                 "long_press_timer",
-                 portMAX_DELAY,
-                 pdFALSE,
-                 "l_p_t",
-                 longpress_cb)) == NULL
-            ? ESP_FAIL
-            : ESP_OK,
-        TAG,
-        "Can't create long press timer");
-
     const int gpio_pulse_pin = PULSE_PIN;
     const uint64_t gpio_pulse_pin_mask = 1ULL << gpio_pulse_pin;
     const int gpio_mainbtn_pin = MAIN_BTN;
@@ -806,7 +778,7 @@ esp_err_t esp_zb_power_save_init(void)
     return rc;
 }
 
-void report_reset_reason()
+esp_err_t report_reset_reason()
 {
     esp_reset_reason_t reset_reason = esp_reset_reason();
     switch (reset_reason)
@@ -824,23 +796,27 @@ void report_reset_reason()
         ESP_LOGI(TAG, "Software reset reason");
         break;
     case ESP_RST_PANIC: //!< Software reset due to exception/panic
+        device_extended_status |= ESP_ZB_ZCL_METERING_PROGRAM_MEMORY_ERROR;
         ESP_LOGI(TAG, "Esception/panic reset reason");
-        break;
+        return ESP_FAIL;
     case ESP_RST_INT_WDT: //!< Reset (software or hardware) due to interrupt watchdog
         ESP_LOGI(TAG, "Reset (Software of Hardware) reset reason");
         break;
     case ESP_RST_TASK_WDT: //!< Reset due to task watchdog
         ESP_LOGI(TAG, "Task watchdog reset reason");
-        break;
+        device_extended_status |= ESP_ZB_ZCL_METERING_WATCHDOG_ERROR;
+        return ESP_FAIL;
     case ESP_RST_WDT: //!< Reset due to other watchdogs
         ESP_LOGI(TAG, "Other watchdog reset reason");
-        break;
+        device_extended_status |= ESP_ZB_ZCL_METERING_WATCHDOG_ERROR;
+        return ESP_FAIL;
     case ESP_RST_DEEPSLEEP: //!< Reset after exiting deep sleep mode
         ESP_LOGI(TAG, "After exiting deep sleep reset reason");
         break;
     case ESP_RST_BROWNOUT: //!< Brownout reset (software or hardware)
         ESP_LOGI(TAG, "Brownout reset reason");
-        break;
+        device_extended_status |= ESP_ZB_ZCL_METERING_BATTERY_FAILURE;
+        return ESP_FAIL;
     case ESP_RST_SDIO: //!< Reset over SDIO
         ESP_LOGI(TAG, "SDIO reset reason");
         break;
@@ -860,6 +836,7 @@ void report_reset_reason()
         ESP_LOGI(TAG, "CPU lock up reset reason");
         break;
     }
+    return ESP_OK;
 }
 
 // Entry point
@@ -869,31 +846,28 @@ void app_main(void)
     esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_LOGD(TAG, "\n");
     ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
-    report_reset_reason();
+    esp_err_t reset_error = report_reset_reason();
 
+    ESP_ERROR_CHECK((deep_sleep_timer = xTimerCreate("deep_sleep_timer", portMAX_DELAY, pdFALSE, "d_s_t", enter_deep_sleep_cb)) == NULL ? ESP_FAIL : ESP_OK);
+    ESP_ERROR_CHECK((long_press_timer = xTimerCreate("long_press_timer", portMAX_DELAY, pdFALSE, "l_p_t", longpress_cb)) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK((deep_sleep_queue_handle = xQueueCreate(1, sizeof(TickType_t))) == NULL ? ESP_FAIL : ESP_OK);
-    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 15, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK((main_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
     ESP_ERROR_CHECK((report_event_group_handle = xEventGroupCreate()) == NULL ? ESP_FAIL : ESP_OK);
+    ESP_ERROR_CHECK(xTaskCreate(save_counter_task, "save_counter", 2048, NULL, 15, &save_counter_task_handle) != pdPASS);
     ESP_ERROR_CHECK(xTaskCreate(btn_long_press_start_task, "long_press_start", 2048, NULL, 5, &btn_start_task_handle) != pdPASS);
     ESP_ERROR_CHECK(xTaskCreate(btn_long_press_stop_task, "long_press_stop", 2048, NULL, 5, &btn_stop_task_handle) != pdPASS);
-    ESP_ERROR_CHECK(
-        (reset_instantaneous_demand_timer =
-             xTimerCreate(
-                 "reset_inst_dema",
-                 pdMS_TO_TICKS(TIME_TO_RESET_INSTANTANEOUS_D),
-                 pdFALSE,
-                 "r_i_d",
-                 reset_instantaneous_demand_cb)) == NULL
-            ? ESP_FAIL
-            : ESP_OK);
+    ESP_ERROR_CHECK((reset_instantaneous_demand_timer = xTimerCreate("reset_inst_dema", pdMS_TO_TICKS(TIME_TO_RESET_INSTANTANEOUS_D), pdFALSE, "r_i_d", reset_instantaneous_demand_cb)) == NULL ? ESP_FAIL : ESP_OK);
+
+    if (reset_error != ESP_OK) {
+        xEventGroupSetBits(report_event_group_handle, EXTENDED_STATUS_REPORT);
+    }
 
     ESP_ERROR_CHECK(gm_gpio_interrup_init());
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_zb_power_save_init());
     ESP_ERROR_CHECK(gm_counter_load_nvs());
-
     ESP_ERROR_CHECK(gm_deep_sleep_init());
+    // ESP_ERROR_CHECK(config_led());
 
     // start main loop
     ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);

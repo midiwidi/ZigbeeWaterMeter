@@ -30,7 +30,13 @@ extern const char *TAG;
 // this is not implemented because of lack of support from esp-zigbee-sdk
 // see https://github.com/espressif/esp-zigbee-sdk/issues/561
 #define SHALL_DISABLE_ZIGBEE            (1 << 2) 
+// Command to stop the deep sleep functionality at all. This is required
+// while OTA is updating the firmware. New events shall no reschedule the
+// deep sleep timer
 #define SHALL_STOP_DEEP_SLEEP						(1 << 3)
+
+// Command to start the deel sleep functionality. When the main loop starts
+// and when the OTA is cancelled
 #define SHALL_START_DEEP_SLEEP					(1 << 4)
 
 extern EventGroupHandle_t report_event_group_handle;

@@ -14,8 +14,10 @@
 #include "esp_check.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
+#include "zcl/esp_zigbee_zcl_metering.h"
 
 #include "esp_zb_gas_meter.h"
+#include "esp_zb_gas_meter_zigbee.h"
 #include "esp_zb_gas_meter_adc.h"
 #include "esp_zb_gas_meter_adc_zigbee.h"
 
@@ -163,6 +165,13 @@ void adc_task(void *arg)
                 battery_alarm_state |= (1 << 0); // BatteryVoltageMinThreshold or BatteryPercentageMinThreshold reached for Battery Source 1
             } else {
                 battery_alarm_state &= ~(1 << 0);
+            }
+            if (battery_alarm_state != 0 && (device_status & ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY) == 0) {
+                device_status |= ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY;
+                xEventGroupSetBits(report_event_group_handle, STATUS_REPORT);
+            } else if (battery_alarm_state == 0 && (device_status & ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY) != 0) {
+                device_status &= ~ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY;
+                xEventGroupSetBits(report_event_group_handle, STATUS_REPORT);
             }
 
             ESP_LOGI(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d Alarm 0x%lx", 
