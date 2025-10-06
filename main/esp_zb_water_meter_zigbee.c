@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit
@@ -14,11 +14,11 @@
 #include "freertos/FreeRTOS.h"
 #include "hal/ieee802154_ll.h"
 
-#include "esp_zb_gas_version.h"
-#include "esp_zb_gas_meter.h"
-#include "esp_zb_gas_meter_zigbee.h"
-#include "esp_zb_gas_meter_adc_zigbee.h"
-#include "esp_zb_gas_ota.h"
+#include "esp_zb_water_version.h"
+#include "esp_zb_water_meter.h"
+#include "esp_zb_water_meter_zigbee.h"
+#include "esp_zb_water_meter_adc_zigbee.h"
+#include "esp_zb_water_ota.h"
 
 /* Zigbee configuration */
 #define ED_AGING_TIMEOUT                ESP_ZB_ED_AGING_TIMEOUT_64MIN
@@ -26,10 +26,10 @@
 #define ESP_ZB_PRIMARY_CHANNEL_MASK     ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK  /* Zigbee primary channel mask use in the example */
 #define MY_METERING_ENDPOINT            1
 
-#define ESP_MANUFACTURER_NAME           "\x06""MICASA"
-#define ESP_MODEL_IDENTIFIER            "\x08""GasMeter" /* Customized model identifier */
-#define ESP_DATE_CODE                   "\x08""20250301"
-#define ESP_PRODUCT_URL                 "\x2B""https://github.com/IgnacioHR/ZigbeeGasMeter"
+#define ESP_MANUFACTURER_NAME           "\x08""MIDIWIDI"
+#define ESP_MODEL_IDENTIFIER            "\x0A""WaterMeter" /* Customized model identifier */
+#define ESP_DATE_CODE                   "\x08""20251006"
+#define ESP_PRODUCT_URL                 "\x2C""https://github.com/midiwidi/ZigbeeWaterMeter"
 
 esp_zb_uint48_t current_summation_delivered = {
 	.low = 0,
@@ -64,8 +64,8 @@ uint8_t summation_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 7, 2) ;/
 // Formatting instantaneous demand with 3 decimal places
 uint8_t demand_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 2, 3) ;//0x23; 
 
-// Gas metering type
-uint8_t metering_device_type = ESP_ZB_ZCL_METERING_GAS_METERING; 
+// Water metering type
+uint8_t metering_device_type = ESP_ZB_ZCL_METERING_WATER_METERING; 
 
 // m³
 uint8_t unit_of_measure = ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY; 

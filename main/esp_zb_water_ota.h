@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit
@@ -11,7 +11,7 @@
  */
 #include "esp_err.h"
 #include "zcl/esp_zigbee_zcl_command.h"
-#include "esp_zb_gas_version.h"
+#include "esp_zb_water_version.h"
 
 #define OTA_UPGRADE_MAX_DATA_SIZE       223
 #define OTA_ELEMENT_HEADER_LEN          6

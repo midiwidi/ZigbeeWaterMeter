@@ -1,10 +1,5 @@
-notes/
+sdkconfig.old
 build/
 managed_components/
-consumption-measures/
 .vscode/
-sdkconfig.old
-start_mosquitto.sh
-build_ota.sh
-Cálculos.xlsx
 ~*

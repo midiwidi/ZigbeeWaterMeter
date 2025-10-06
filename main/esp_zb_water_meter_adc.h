@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit

@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit
@@ -16,10 +16,10 @@
 #include "freertos/FreeRTOS.h"
 #include "zcl/esp_zigbee_zcl_metering.h"
 
-#include "esp_zb_gas_meter.h"
-#include "esp_zb_gas_meter_zigbee.h"
-#include "esp_zb_gas_meter_adc.h"
-#include "esp_zb_gas_meter_adc_zigbee.h"
+#include "esp_zb_water_meter.h"
+#include "esp_zb_water_meter_zigbee.h"
+#include "esp_zb_water_meter_adc.h"
+#include "esp_zb_water_meter_adc_zigbee.h"
 
 #include "esp_adc/adc_continuous.h"
 #include "esp_adc/adc_cali.h"
@@ -166,11 +166,11 @@ void adc_task(void *arg)
             } else {
                 battery_alarm_state &= ~(1 << 0);
             }
-            if (battery_alarm_state != 0 && (device_status & ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY) == 0) {
-                device_status |= ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY;
+            if (battery_alarm_state != 0 && (device_status & ESP_ZB_ZCL_METERING_WATER_LOW_BATTERY) == 0) {
+                device_status |= ESP_ZB_ZCL_METERING_WATER_LOW_BATTERY;
                 xEventGroupSetBits(report_event_group_handle, STATUS_REPORT);
-            } else if (battery_alarm_state == 0 && (device_status & ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY) != 0) {
-                device_status &= ~ESP_ZB_ZCL_METERING_GAS_LOW_BATTERY;
+            } else if (battery_alarm_state == 0 && (device_status & ESP_ZB_ZCL_METERING_WATER_LOW_BATTERY) != 0) {
+                device_status &= ~ESP_ZB_ZCL_METERING_WATER_LOW_BATTERY;
                 xEventGroupSetBits(report_event_group_handle, STATUS_REPORT);
             }
 

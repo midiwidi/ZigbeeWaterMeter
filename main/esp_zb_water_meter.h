@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit
@@ -15,7 +15,7 @@
 extern const char *TAG;
 
 // output - pin to enable battery voltage to the adc converter
-#define BAT_MON_ENABLE                  		GPIO_NUM_6
+#define BAT_MON_ENABLE                  		GPIO_NUM_21
 
 // Report event group events
 #define CURRENT_SUMMATION_DELIVERED_REPORT  (1 << 0)

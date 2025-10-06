@@ -1,6 +1,6 @@
 /*
- * Zigbee Gas Meter - An open-source Zigbee gas meter project.
- * Copyright (c) 2025 Ignacio Hernández-Ros.
+ * Zigbee Water Meter - An open-source Zigbee water meter project.
+ * Copyright (c) 2025 Ignacio Hernández-Ros and Markus Wiedemann.
  *
  * This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
  * International License. To view a copy of this license, visit
@@ -20,10 +20,10 @@
 #include "sys/time.h"
 #include "esp_timer.h"
 
-#include "esp_zb_gas_meter.h"
-#include "esp_zb_gas_meter_adc.h"
-#include "esp_zb_gas_meter_zigbee.h"
-#include "esp_zb_gas_ota.h"
+#include "esp_zb_water_meter.h"
+#include "esp_zb_water_meter_adc.h"
+#include "esp_zb_water_meter_zigbee.h"
+#include "esp_zb_water_ota.h"
 
 /* Experimental, check if we sleepy device can help the design */
 #ifdef CONFIG_PM_ENABLE
@@ -33,11 +33,11 @@
 
 /* Hardware configuration */
 
-// input - pin with gas magnetic sensor contact
+// input - pin with water magnetic sensor contact
 #define PULSE_PIN GPIO_NUM_2
 
 // input - pin for the main button
-#define MAIN_BTN GPIO_NUM_4
+#define MAIN_BTN GPIO_NUM_1
 
 // input - pin to measure battery voltage
 #define BAT_VLTG GPIO_NUM_0
@@ -50,12 +50,12 @@
 // How long the MAIN BUTTON must be pressed to consider a LONG PRESS
 #define LONG_PRESS_TIMEOUT 5 // seconds
 
-#define NVS_NAMESPACE "gas_monitor"
+#define NVS_NAMESPACE "water_monitor"
 #define NVS_KEY "counter"
 
 #define TIME_TO_RESET_INSTANTANEOUS_D UINT32_C(TIME_TO_SLEEP_ZIGBEE_ON - 2000)
 
-const char *TAG = "MICASA_GAS_METER";
+const char *TAG = "MIDIWIDI_WATER_METER";
 
 // Last time a pulse was received
 RTC_DATA_ATTR struct timeval last_pulse_time;
@@ -109,7 +109,7 @@ esp_err_t gm_counter_load_nvs()
     else
     {
         device_extended_status |= ESP_ZB_ZCL_METERING_NV_MEMORY_ERROR;
-        device_status |= ESP_ZB_ZCL_METERING_GAS_CHECK_METER;
+        device_status |= ESP_ZB_ZCL_METERING_WATER_CHECK_METER;
         xEventGroupSetBits(report_event_group_handle, STATUS_REPORT | EXTENDED_STATUS_REPORT);
 
         ESP_LOGE(TAG, "Error opening NVS: %s", esp_err_to_name(err));
@@ -141,7 +141,7 @@ void save_counter_task(void *arg)
         else
         {
             device_extended_status |= ESP_ZB_ZCL_METERING_NV_MEMORY_ERROR;
-            device_status |= ESP_ZB_ZCL_METERING_GAS_CHECK_METER;
+            device_status |= ESP_ZB_ZCL_METERING_WATER_CHECK_METER;
             xEventGroupSetBits(report_event_group_handle, STATUS_REPORT | EXTENDED_STATUS_REPORT);
             ESP_LOGE(TAG, "Error saving NVS: %s", esp_err_to_name(err));
         }
@@ -549,7 +549,7 @@ void enter_deep_sleep_cb(TimerHandle_t xTimer)
     esp_deep_sleep_start();
 }
 
-// configure deep sleep for the gas meter
+// configure deep sleep for the water meter
 esp_err_t gm_deep_sleep_init()
 {
     const int gpio_pulse_pin = PULSE_PIN;
@@ -596,7 +596,7 @@ esp_err_t gm_deep_sleep_init()
         }
         if ((ext1mask & gpio_pulse_pin_mask) == gpio_pulse_pin_mask)
         { // wakeup from PULSE_PIN
-            ESP_LOGI(TAG, "Wake up from GAS PULSE. Time spent in deep sleep and boot: %dms", sleep_time_ms);
+            ESP_LOGI(TAG, "Wake up from WATER PULSE. Time spent in deep sleep and boot: %dms", sleep_time_ms);
             // check_gpio_time = true;
             int level = gpio_get_level(PULSE_PIN);
             // if PULSE_PIN is low AND check_gpio_time is true we
@@ -721,7 +721,7 @@ esp_err_t gm_gpio_interrup_init()
                                    .intr_type = GPIO_INTR_ANYEDGE, //     ^--^- Interrupt both edges
                                    .mode = GPIO_MODE_INPUT,        // Input pin
                                    .pin_bit_mask = pulse_pin,
-                                   .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                                   .pull_down_en = GPIO_PULLDOWN_ENABLE,
                                    .pull_up_en = GPIO_PULLUP_DISABLE};
     ESP_RETURN_ON_ERROR(gpio_config(&io_conf_pulse), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
 
@@ -731,7 +731,7 @@ esp_err_t gm_gpio_interrup_init()
                                      .intr_type = GPIO_INTR_ANYEDGE, //     ^--^- Interrupt both edges
                                      .mode = GPIO_MODE_INPUT,        // Input pin
                                      .pin_bit_mask = mainbtn_pin,
-                                     .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                                     .pull_down_en = GPIO_PULLDOWN_ENABLE,
                                      .pull_up_en = GPIO_PULLUP_DISABLE};
     ESP_RETURN_ON_ERROR(gpio_config(&io_conf_mainbtn), TAG, "Can't config gpio for PULSE_PIN and MAIN_PIN pins");
 
@@ -845,7 +845,7 @@ void app_main(void)
     esp_log_level_set("*", ESP_LOG_ERROR);
     esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_LOGD(TAG, "\n");
-    ESP_LOGI(TAG, "Starting Zigbee GasMeter...");
+    ESP_LOGI(TAG, "Starting Zigbee WaterMeter...");
     esp_err_t reset_error = report_reset_reason();
 
     ESP_ERROR_CHECK((deep_sleep_timer = xTimerCreate("deep_sleep_timer", portMAX_DELAY, pdFALSE, "d_s_t", enter_deep_sleep_cb)) == NULL ? ESP_FAIL : ESP_OK);
@@ -870,5 +870,5 @@ void app_main(void)
     // ESP_ERROR_CHECK(config_led());
 
     // start main loop
-    ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "gas_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);
+    ESP_ERROR_CHECK(xTaskCreate(gm_main_loop_task, "water_meter_main", 8192, NULL, tskIDLE_PRIORITY, NULL) != pdPASS);
 }
