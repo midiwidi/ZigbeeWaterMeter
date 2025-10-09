@@ -58,27 +58,27 @@ uint8_t battery_quantity = 2;
 // I've never seen before. I don't know if there is a value for DIY devices
 uint16_t manufacturer_code = HW_MANUFACTURER_CODE;
 
-// Formatting current_summation_delivered with 7 digits and 2 decimal places
-uint8_t summation_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 7, 2) ;// 0x72;
+// Formatting current_summation_delivered with 7 digits and 0 decimal places
+uint8_t summation_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 7, 0) ;
 
-// Formatting instantaneous demand with 3 decimal places
-uint8_t demand_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 2, 3) ;//0x23; 
+// Formatting instantaneous demand with 1 decimal places
+uint8_t demand_formatting = ESP_ZB_ZCL_METERING_FORMATTING_SET(true, 4, 1) ;
 
 // Water metering type
 uint8_t metering_device_type = ESP_ZB_ZCL_METERING_WATER_METERING; 
 
 // m³
-uint8_t unit_of_measure = ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY; 
+uint8_t unit_of_measure = ESP_ZB_ZCL_METERING_UNIT_L_LH_BINARY; 
 
-// 1 m³ for every 100 pulses
+// 1 liter for every 1 pulse
 esp_zb_uint24_t multiplier = {
     .low = 1,
     .high = 0
 };
 
-// 100 pulses is 1 m³
+// 1 pulse is 1 liter
 esp_zb_uint24_t divisor = {
-    .low = 100, // test to avoid report configuration issue
+    .low = 1,
     .high = 0
 };
 

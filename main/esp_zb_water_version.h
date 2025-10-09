@@ -10,7 +10,7 @@
  * as you credit the original author(s) and share any derivatives under the same license.
  */
 
-#define HW_MANUFACTURER_CODE            0x8888
+#define HW_MANUFACTURER_CODE            0x9999
 #define OTA_UPGRADE_HW_VERSION          0x0101
 #define OTA_UPGRADE_IMAGE_TYPE          0x1011
 #define HARDWARE_VERSION                0x01
