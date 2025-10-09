@@ -36,13 +36,10 @@ const tzLocal = {
 
         convertSet: async (entity, key, value, meta) => {
             if (key === 'water_consumption') {
-                // Convert the value to uint48 format
-                // Value is in liters (or whatever unit your device uses)
-                const high = Math.floor(value / 0x100000000);
-                const low = value % 0x100000000;
+                const intValue = Math.floor(value);
                 
                 await entity.write('seMetering', {
-                    currentSummDelivered: [low, high]
+                    currentSummDelivered: intValue
                 });
                 
                 return {state: {water_consumption: value}};
