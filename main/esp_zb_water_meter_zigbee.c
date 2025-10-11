@@ -156,7 +156,7 @@ esp_err_t zb_write_attr_resp_handler(const esp_zb_zcl_cmd_write_attr_resp_messag
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
 
-    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(%d)",
+    ESP_LOGI(TAG, "Write attribute response: from address(0x%x) src endpoint(%d) to dst endpoint(%d) cluster(0x%x) transaction(0x%d)",
         message->info.src_address.u.short_addr, 
         message->info.src_endpoint,
         message->info.dst_endpoint, 
@@ -454,11 +454,11 @@ void esp_zb_task(void *pvParameters)
 
     /* power cluster */
     esp_zb_power_config_cluster_cfg_t power_cfg = {
-        .main_voltage = 74,
+        .main_voltage = 33,              // 3.3V
         .main_freq = 0,
         .main_alarm_mask = 0x03,
-        .main_voltage_min = 70,
-        .main_voltage_max = 84,
+        .main_voltage_min = 33,          // 3.3V minimum
+        .main_voltage_max = 42,          // 4.2V maximum
         .main_voltage_dwell = MUST_SYNC_MINIMUM_TIME
     };
 

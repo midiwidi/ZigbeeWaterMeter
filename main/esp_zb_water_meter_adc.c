@@ -25,16 +25,50 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
+#define BAT_DIVIDER_R1      120000  // 120k resistor to battery positive
+#define BAT_DIVIDER_R2      38000   // 38k resistor to ground
+#define BAT_DIVIDER_RATIO   ((float)(BAT_DIVIDER_R1 + BAT_DIVIDER_R2) / BAT_DIVIDER_R2)
+
 uint8_t battery_voltage = 0;
 uint8_t battery_percentage = 0;
 uint32_t battery_alarm_state = 0;
-uint8_t battery_voltage_min = 70;
-uint8_t battery_voltage_th1 = 72;
+uint8_t battery_voltage_min = 33;
+uint8_t battery_voltage_th1 = 34;
 
 struct timeval last_battery_measurement_time;
 
-adc_channel_t channel = ADC_CHANNEL_0; // ADC_CHANNEL_3 is a better option, but the current board was using 0 so let's change it now GPIO 3
+adc_channel_t channel = ADC_CHANNEL_0;
 adc_continuous_handle_t handle = NULL;
+
+// Lookup Table for battery voltage -> percentage conversion
+static const struct {
+    uint8_t percentage;
+    float voltage;
+} battery_lut[] = {
+    {100, 4.20}, {95, 4.15}, {90, 4.11}, {85, 4.08}, {80, 4.02},
+    {75, 3.98}, {70, 3.95}, {65, 3.91}, {60, 3.87}, {55, 3.85},
+    {50, 3.84}, {45, 3.82}, {40, 3.80}, {35, 3.79}, {30, 3.77},
+    {25, 3.75}, {20, 3.73}, {15, 3.71}, {10, 3.69}, {5, 3.61},
+    {0, 3.27}
+};
+
+static uint8_t interpolate_battery_percentage(float voltage) {
+    // Handle out of bounds cases
+    if (voltage >= battery_lut[0].voltage) return 100;
+    if (voltage <= battery_lut[20].voltage) return 0;
+    
+    // Find the voltage range
+    for (int i = 0; i < 20; i++) {
+        if (voltage <= battery_lut[i].voltage && voltage > battery_lut[i + 1].voltage) {
+            // Linear interpolation
+            float v_delta = battery_lut[i].voltage - battery_lut[i + 1].voltage;
+            float p_delta = battery_lut[i].percentage - battery_lut[i + 1].percentage;
+            float v_offset = battery_lut[i].voltage - voltage;
+            return battery_lut[i].percentage - (uint8_t)((v_offset * p_delta) / v_delta + 0.5f);
+        }
+    }
+    return 0;
+}
 
 esp_err_t bat_adc_calibration_init(const adc_unit_t unit, const adc_channel_t channel, const adc_atten_t atten, adc_cali_handle_t *out_handle)
 {
@@ -96,7 +130,7 @@ void bat_continuous_adc_init(const adc_channel_t channel, adc_continuous_handle_
     };
 
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    adc_pattern[0].atten = ADC_ATTEN_DB_12;
+    adc_pattern[0].atten = ADC_ATTEN_DB_0;
     adc_pattern[0].channel = channel & 0x7;
     adc_pattern[0].unit = ADC_UNIT_1;
     adc_pattern[0].bit_width = ADC_BITWIDTH_12;
@@ -113,7 +147,7 @@ void adc_task(void *arg)
     ESP_LOGD(TAG, "ADC Task Init...");
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
 
-    gpio_set_level(BAT_MON_ENABLE, 1);
+    //gpio_set_level(BAT_MON_ENABLE, 1);
     vTaskDelay(pdMS_TO_TICKS(5000));
     bat_continuous_adc_init(channel, &handle);
     adc_continuous_evt_cbs_t cbs = {
@@ -121,13 +155,13 @@ void adc_task(void *arg)
     };
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
     ESP_ERROR_CHECK(adc_continuous_start(handle));
-    ESP_ERROR_CHECK(bat_adc_calibration_init(ADC_UNIT_1, channel, ADC_ATTEN_DB_12, &adc1_cali_chan0_handle));
+    ESP_ERROR_CHECK(bat_adc_calibration_init(ADC_UNIT_1, channel, ADC_ATTEN_DB_0, &adc1_cali_chan0_handle));
 
     uint8_t result[BAT_BUFFER_READ_LEN] = {0};
     memset(result, 0xcc, BAT_BUFFER_READ_LEN);
 
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    gpio_set_level(BAT_MON_ENABLE, 0);
+    //gpio_set_level(BAT_MON_ENABLE, 0);
 
     uint32_t ret_num = 0;
     esp_err_t ret = adc_continuous_read(handle, result, BAT_BUFFER_READ_LEN, &ret_num, 0);
@@ -148,12 +182,19 @@ void adc_task(void *arg)
             uint32_t average = total / values;
             int voltage;
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, average, &voltage));
-            // convert to 2s lipo ranges and mult by 10
-            float bat_voltage = (float)(0.036207)*voltage; 
-            battery_voltage = (uint8_t)(bat_voltage+(float)0.5);
-            battery_percentage = (uint8_t)((bat_voltage-(float)(70.0))*(float)(14.28571429));
-            if (battery_percentage > 200)
-                battery_percentage = 200;
+            
+            // voltage is in mV, convert to battery voltage using divider ratio
+            float bat_voltage = (float)voltage * BAT_DIVIDER_RATIO / 1000.0f;
+            
+            // Store as decivolts (multiply by 10 and round)
+            battery_voltage = (uint8_t)(bat_voltage * 10.0f + 0.5f);
+            
+            // Calculate percentage using lookup table with actual voltage
+            battery_percentage = interpolate_battery_percentage(bat_voltage);
+            
+            // Scale battery percentage for Zigbee (0-200 represents 0-100%)
+            battery_percentage *= 2;
+            
             xEventGroupSetBits(report_event_group_handle, BATTER_REPORT);
 
             if (battery_voltage < battery_voltage_th1) {
@@ -175,7 +216,7 @@ void adc_task(void *arg)
             }
 
             ESP_LOGI(TAG, "Raw: %"PRIu32" Calibrated: %"PRId16"mV Bat Voltage: %1.2fv ZB Voltage: %d ZB Percentage: %d Alarm 0x%lx", 
-                average, voltage, bat_voltage/(float)(10.0), battery_voltage, battery_percentage, battery_alarm_state);
+                average, voltage, bat_voltage, battery_voltage, battery_percentage, battery_alarm_state);
             gettimeofday(&last_battery_measurement_time, NULL);
         }
     } else if (ret == ESP_ERR_TIMEOUT) {
