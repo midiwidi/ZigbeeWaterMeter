@@ -42,6 +42,12 @@
 // input - pin to measure battery voltage
 #define BAT_VLTG GPIO_NUM_0
 
+// output - pin to power the antenna RF switch
+#define RF_SWITCH_POWER GPIO_NUM_3
+
+// output - pin to select the antenna (0 = PCB trace antenna, 1 = external antenna)
+#define RF_SWITCH_SEL GPIO_NUM_14
+
 // amount of time to ignore a digital input pin interrupt repetition
 #define DEBOUNCE_TIMEOUT 20 /* milliseconds */
 
@@ -54,6 +60,9 @@
 #define NVS_KEY "counter"
 
 #define TIME_TO_RESET_INSTANTANEOUS_D UINT32_C(TIME_TO_SLEEP_ZIGBEE_ON - 2000)
+
+#define RF_ANTENNA_INTERNAL 0
+#define RF_ANTENNA_EXTERNAL 1
 
 const char *TAG = "MIDIWIDI_WATER_METER";
 
@@ -85,6 +94,30 @@ EventGroupHandle_t report_event_group_handle = NULL;
 EventGroupHandle_t main_event_group_handle = NULL;
 
 static portMUX_TYPE counter_spinlock = portMUX_INITIALIZER_UNLOCKED;
+
+// Select which antenna is used
+esp_err_t configure_rf_switch(uint8_t antenna_selection)
+{
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_DISABLE,
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = (1ULL << RF_SWITCH_POWER) | (1ULL << RF_SWITCH_SEL),
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE
+    };
+    
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Failed to configure RF switch pins");
+    
+    // Power up the RF switch (active low)
+    ESP_RETURN_ON_ERROR(gpio_set_level(RF_SWITCH_POWER, 0), TAG, "Failed to enable RF switch");
+    
+    // Select antenna based on parameter (0 = internal, 1 = external)
+    ESP_RETURN_ON_ERROR(gpio_set_level(RF_SWITCH_SEL, antenna_selection), TAG, 
+        "Failed to select antenna %s", antenna_selection ? "external" : "internal");
+    
+    ESP_LOGI(TAG, "RF switch configured for %s antenna", antenna_selection ? "external" : "internal");
+    return ESP_OK;
+}
 
 // Load counter value from NVS
 esp_err_t gm_counter_load_nvs()
@@ -864,6 +897,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(gm_gpio_interrup_init());
     ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(configure_rf_switch(RF_ANTENNA_EXTERNAL));
     ESP_ERROR_CHECK(esp_zb_power_save_init());
     ESP_ERROR_CHECK(gm_counter_load_nvs());
     ESP_ERROR_CHECK(gm_deep_sleep_init());
