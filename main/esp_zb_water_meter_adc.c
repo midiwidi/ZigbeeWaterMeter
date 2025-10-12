@@ -148,7 +148,6 @@ void adc_task(void *arg)
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
 
     //gpio_set_level(BAT_MON_ENABLE, 1);
-    vTaskDelay(pdMS_TO_TICKS(5000));
     bat_continuous_adc_init(channel, &handle);
     adc_continuous_evt_cbs_t cbs = {
         .on_conv_done = bat_conv_done_cb,
